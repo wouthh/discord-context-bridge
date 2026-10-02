@@ -8,6 +8,7 @@ import { readHttp } from "../examples/http-client.js";
 import { readMcp } from "../examples/mcp-client.js";
 import { Store } from "../packages/service/src/store.js";
 import { createApp } from "../packages/service/src/http.js";
+import { configSchema, loopbackHost } from "../packages/service/src/config.js";
 import { DeliveryQueue } from "../packages/sources/src/queue.js";
 import { MAX_INGEST_BYTES } from "../packages/domain/src/index.js";
 import {
@@ -18,13 +19,16 @@ import {
   now,
   source,
 } from "./fixtures.js";
-async function start() {
-  const s = new Store(config(), () => now);
-  const server = createApp(s).listen(0, "127.0.0.1");
+async function start(ipv6 = false) {
+  const cfg = config();
+  if (ipv6) cfg.publicUrl = "http://[::1]:8787";
+  const s = new Store(configSchema.parse(cfg), () => now);
+  const host = loopbackHost(s.config);
+  const server = createApp(s).listen(0, host);
   await once(server, "listening");
   const port = (server.address() as AddressInfo).port;
   s.config.port = port;
-  s.config.publicUrl = `http://127.0.0.1:${port}`;
+  s.config.publicUrl = `http://${host === "::1" ? "[::1]" : host}:${port}`;
   return {
     s,
     url: s.config.publicUrl,
@@ -50,6 +54,34 @@ async function request(
     body: JSON.stringify(body),
   });
 }
+test("configured IPv6 loopback serves authenticated ingestion and HTTP/MCP readers", async () => {
+  const run = await start(true);
+  try {
+    assert.equal((await request(run.url, "/v1/read_messages")).status, 401);
+    assert.equal(
+      (
+        await request(run.url, "/v1/ingest", producerToken, {
+          events: [event()],
+        })
+      ).status,
+      200,
+    );
+    const http = await readHttp(run.url, readerToken);
+    assert.deepEqual(http, await readMcp(run.url, readerToken));
+    assert.equal((http as { items: unknown[] }).items.length, 1);
+    // An HTTPS public origin never determines a publicly exposed listener.
+    assert.equal(
+      loopbackHost({
+        ...run.s.config,
+        remote: true,
+        publicUrl: "https://bridge.example.invalid",
+      }),
+      "127.0.0.1",
+    );
+  } finally {
+    await run.close();
+  }
+});
 test("real HTTP and SDK Streamable HTTP read identical scoped content and reject role swapping", async () => {
   const run = await start();
   const client = new Client({ name: "synthetic-client", version: "1.0" });

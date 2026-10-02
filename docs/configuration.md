@@ -80,4 +80,6 @@ Local `http://[::1]:<port>` binds IPv6 loopback; local IPv4/localhost origins us
 
 Use local control to revoke the affected source/conversation before replacing its producer credentials. For local auth, remove the old hash from private configuration and restart the connector; provision a new private credential/hash pair without printing it. For JWT auth, revoke the issuer grant/credential and remove or narrow the configured bridge grant, then restart. Short token lifetime limits exposure but is not instant issuer revocation checking.
 
+Local credential rotation requires an existing owner-only regular configuration file in an owner-only directory outside Git, including when `BRIDGE_CONFIG` overrides the default. Final file symlinks, shared files and hard links are rejected; safe parent aliases are canonicalized and the validated file handle stays pinned throughout rotation.
+
 Reset a bot token in Discord's Developer Portal and enter its replacement with `npm run setup`. OS keyring entries can be updated by setup; owner-only fallback files deliberately refuse implicit overwrite; explicit setup replacement/rotation validates private file ownership. Use the explicit setup rotation/replacement action after revocation; stop the connector first, then restart with the updated local hash. Preserve unrelated state. Never paste secrets into diagnostics or tickets.

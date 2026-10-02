@@ -1,9 +1,13 @@
 import { password, select, confirm } from "@inquirer/prompts";
 import { randomBytes } from "node:crypto";
-import { writeFile, readFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { saveSecret, privateStateDir } from "./secrets.js";
+import {
+  saveSecret,
+  privateStateDir,
+  openPrivateConfiguration,
+} from "./secrets.js";
 import { configSchema } from "./config.js";
 import { tokenHash } from "./auth.js";
 export async function createLocalConfiguration(storeCredential = saveSecret) {
@@ -45,6 +49,49 @@ export async function createLocalConfiguration(storeCredential = saveSecret) {
   await storeCredential("BRIDGE_READER_TOKEN", reader);
   return join(directory, "config.json");
 }
+export async function rotateLocalCredential(
+  role: "reader" | "producer",
+  storeCredential = saveSecret,
+) {
+  const directory = await privateStateDir();
+  process.env.BRIDGE_STATE_DIR = directory;
+  const file = await openPrivateConfiguration(
+    process.env.BRIDGE_CONFIG ?? join(directory, "config.json"),
+  );
+  try {
+    const cfg = configSchema.parse(JSON.parse(await file.readFile("utf8")));
+    if (cfg.auth.mode !== "local")
+      throw new Error("local_configuration_required");
+    const grant = cfg.auth.credentials.find(
+      (g) => g.role === role && g.subject === `local-${role}`,
+    );
+    if (!grant) throw new Error("local_grant_missing");
+    const token = randomBytes(32).toString("base64url");
+    await storeCredential(
+      role === "reader" ? "BRIDGE_READER_TOKEN" : "BRIDGE_PRODUCER_TOKEN",
+      token,
+      true,
+    );
+    grant.tokenHash = tokenHash(token);
+    grant.expiresAt = Math.floor(Date.now() / 1000) + 30 * 86400;
+    const data = Buffer.from(JSON.stringify(cfg, null, 2) + "\n");
+    let offset = 0;
+    while (offset < data.length) {
+      const result = await file.write(
+        data,
+        offset,
+        data.length - offset,
+        offset,
+      );
+      if (!result.bytesWritten) throw new Error("configuration_write_failed");
+      offset += result.bytesWritten;
+    }
+    await file.truncate(data.length);
+    await file.sync();
+  } finally {
+    await file.close();
+  }
+}
 async function main() {
   process.umask(0o077);
   try {
@@ -79,11 +126,6 @@ async function main() {
         }))
       )
         throw new Error();
-      const directory = await privateStateDir();
-      process.env.BRIDGE_STATE_DIR = directory;
-      const path = process.env.BRIDGE_CONFIG ?? join(directory, "config.json");
-      const cfg = configSchema.parse(JSON.parse(await readFile(path, "utf8")));
-      if (cfg.auth.mode !== "local") throw new Error();
       const role = await select({
         message: "Credential to rotate",
         choices: [
@@ -91,21 +133,7 @@ async function main() {
           { name: "Local producer", value: "producer" },
         ],
       });
-      const grant = cfg.auth.credentials.find(
-        (g) => g.role === role && g.subject === `local-${role}`,
-      );
-      if (!grant) throw new Error();
-      const token = randomBytes(32).toString("base64url");
-      await saveSecret(
-        role === "reader" ? "BRIDGE_READER_TOKEN" : "BRIDGE_PRODUCER_TOKEN",
-        token,
-        true,
-      );
-      grant.tokenHash = tokenHash(token);
-      grant.expiresAt = Math.floor(Date.now() / 1000) + 30 * 86400;
-      await writeFile(path, JSON.stringify(cfg, null, 2) + "\n", {
-        mode: 0o600,
-      });
+      await rotateLocalCredential(role);
       console.info("local_credential_rotated_restart_required");
     } else {
       const name =

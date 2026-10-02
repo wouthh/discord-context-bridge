@@ -9,13 +9,18 @@ import {
   symlink,
   mkdir,
   lstat,
+  writeFile,
+  link,
 } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveSecret, readSecret } from "../packages/service/src/secrets.js";
-import { createLocalConfiguration } from "../packages/service/src/setup.js";
+import {
+  createLocalConfiguration,
+  rotateLocalCredential,
+} from "../packages/service/src/setup.js";
 import { configSchema } from "../packages/service/src/config.js";
 import { Store } from "../packages/service/src/store.js";
 test("synthetic secrets fallback is private, rejects overwrite/shared files and never needs a real keyring", async () => {
@@ -160,6 +165,104 @@ test("state aliases into a Git checkout are rejected before creating missing com
   } finally {
     if (previous === undefined) delete process.env.BRIDGE_STATE_DIR;
     else process.env.BRIDGE_STATE_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("rotation rejects repository, symlink, shared-file and hard-linked config overrides before credential IO", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bridge-rotation-path-"));
+  const previousState = process.env.BRIDGE_STATE_DIR,
+    previousConfig = process.env.BRIDGE_CONFIG;
+  try {
+    const safe = join(dir, "private"),
+      checkout = join(dir, "checkout");
+    await mkdir(safe, { mode: 0o700 });
+    await mkdir(checkout, { mode: 0o700 });
+    await promisify(execFile)("git", ["init", "--quiet", checkout]);
+    process.env.BRIDGE_STATE_DIR = safe;
+    const path = await createLocalConfiguration(async () => "owner-only-file");
+    const original = await readFile(path, "utf8");
+    const repoConfig = join(checkout, "config.json");
+    await writeFile(repoConfig, original, { mode: 0o600 });
+    const symlinkConfig = join(safe, "config-link.json");
+    await symlink(path, symlinkConfig);
+    const sharedConfig = join(safe, "shared.json");
+    await writeFile(sharedConfig, original, { mode: 0o644 });
+    const linkedConfig = join(safe, "hard-link.json");
+    await link(path, linkedConfig);
+    await symlink(checkout, join(dir, "checkout-alias"));
+    let credentialCalls = 0;
+    for (const override of [
+      repoConfig,
+      join(dir, "checkout-alias", "config.json"),
+      symlinkConfig,
+      sharedConfig,
+      linkedConfig,
+    ]) {
+      process.env.BRIDGE_CONFIG = override;
+      await assert.rejects(
+        rotateLocalCredential("reader", async () => {
+          credentialCalls++;
+          return "owner-only-file";
+        }),
+      );
+      assert.equal(await readFile(override, "utf8"), original);
+    }
+    assert.equal(credentialCalls, 0);
+    assert.equal(await readFile(path, "utf8"), original);
+  } finally {
+    if (previousState === undefined) delete process.env.BRIDGE_STATE_DIR;
+    else process.env.BRIDGE_STATE_DIR = previousState;
+    if (previousConfig === undefined) delete process.env.BRIDGE_CONFIG;
+    else process.env.BRIDGE_CONFIG = previousConfig;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+test("rotation pins the canonical private config inode when a safe parent alias is retargeted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bridge-rotation-alias-"));
+  const previousState = process.env.BRIDGE_STATE_DIR,
+    previousConfig = process.env.BRIDGE_CONFIG;
+  try {
+    const safe = join(dir, "private"),
+      checkout = join(dir, "checkout"),
+      alias = join(dir, "alias");
+    await mkdir(safe, { mode: 0o700 });
+    await mkdir(checkout, { mode: 0o700 });
+    await promisify(execFile)("git", ["init", "--quiet", checkout]);
+    process.env.BRIDGE_STATE_DIR = safe;
+    const path = await createLocalConfiguration(async () => "owner-only-file");
+    const original = await readFile(path, "utf8");
+    await writeFile(join(checkout, "config.json"), original, { mode: 0o600 });
+    await symlink(safe, alias);
+    process.env.BRIDGE_CONFIG = join(alias, "config.json");
+    let hash = "";
+    await rotateLocalCredential("reader", async (name, value, replace) => {
+      assert.equal(name, "BRIDGE_READER_TOKEN");
+      assert.equal(replace, true);
+      hash = (await import("../packages/service/src/auth.js")).tokenHash(value);
+      await rm(alias);
+      await symlink(checkout, alias);
+      return "owner-only-file";
+    });
+    const updated = configSchema.parse(
+      JSON.parse(await readFile(path, "utf8")),
+    );
+    assert.equal(updated.auth.mode, "local");
+    if (updated.auth.mode === "local")
+      assert.equal(
+        updated.auth.credentials.find((g) => g.role === "reader")!.tokenHash,
+        hash,
+      );
+    assert.equal((await stat(path)).mode & 0o077, 0);
+    assert.equal(
+      await readFile(join(checkout, "config.json"), "utf8"),
+      original,
+    );
+  } finally {
+    if (previousState === undefined) delete process.env.BRIDGE_STATE_DIR;
+    else process.env.BRIDGE_STATE_DIR = previousState;
+    if (previousConfig === undefined) delete process.env.BRIDGE_CONFIG;
+    else process.env.BRIDGE_CONFIG = previousConfig;
     await rm(dir, { recursive: true, force: true });
   }
 });

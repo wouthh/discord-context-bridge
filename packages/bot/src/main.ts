@@ -9,6 +9,7 @@ import {
 } from "discord.js";
 import { sourceSchema, type Source } from "../../domain/src/index.js";
 import { DeliveryQueue } from "../../sources/src/queue.js";
+import { requestWithDeadline } from "./transport.js";
 import { processPendingRevocations } from "./revocation.js";
 import { readSecret } from "../../service/src/secrets.js";
 import {
@@ -49,14 +50,14 @@ async function main() {
   const revoked = new Set<string>();
   const pending = new Map<string, Source>();
   async function request(path: string, body?: unknown, signal?: AbortSignal) {
-    const response = await fetch(new URL(path, base), {
+    const response = await requestWithDeadline(new URL(path, base), {
       method: body === undefined ? "GET" : "POST",
       headers: {
         Authorization: `Bearer ${producerToken}`,
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: signal ?? AbortSignal.timeout(10000),
+      signal,
       redirect: "error",
     });
     if (!response.ok) throw new Error("BRIDGE_REQUEST_FAILED");

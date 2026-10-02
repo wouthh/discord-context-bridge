@@ -11,8 +11,10 @@ HTTP: `POST /v1/<operation>` with JSON and `Authorization: Bearer <credential>`.
 | `connection_status`  | Enabled/granted sources, scope, account, generation, health, freshness and coverage |
 | `list_conversations` | Selected permitted conversations and source/account identity                        |
 | `read_messages`      | Bounded insertion-order traversal of current message bodies                         |
-| `search`             | Scoped case-insensitive literal text search, requiring `query`                      |
+| `search`             | Scoped Unicode lowercase literal text search, requiring `query`                     |
 | `read_changes`       | Incremental current-body upserts or content-free deletion tombstones                |
+
+Search normalizes text and query to NFC and applies JavaScript locale-independent Unicode lowercase mapping. It preserves accents and does not provide locale-specific collation, fuzzy matching or a linguistic full-case-folding algorithm. Matching is computed from current bodies without storing another content copy.
 
 The strict common argument object accepts optional `sourceId`, `conversationId`, `cursor`, `query`, and `limit` (1–100, default 50). `conversationId` requires `sourceId`. Cursors are opaque UUIDs. Unknown fields are rejected. For status/list calls use `{}`. No requested source can expand the principal's configured grant. Credentials carry no client-selected owner ID.
 

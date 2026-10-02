@@ -46,6 +46,9 @@ type Cursor = {
   snapshot: number;
   position: number;
 };
+// Locale-independent Unicode lowercase matching, with canonical-equivalent text.
+const searchText = (value: string) =>
+  value.normalize("NFC").toLowerCase().normalize("NFC");
 export class Store {
   db: Database.Database;
   private retention: number;
@@ -60,6 +63,12 @@ export class Store {
     if (config.database !== ":memory:") chmodSync(config.database, 0o600);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("secure_delete = ON");
+    this.db.function(
+      "bridge_lower",
+      { deterministic: true },
+      (value: unknown) =>
+        typeof value === "string" ? searchText(value) : null,
+    );
     this.retention = config.retentionDays * 86400000;
     this.db
       .exec(`CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,json TEXT NOT NULL);
@@ -473,7 +482,7 @@ export class Store {
               ).n,
         position: 0,
       };
-    // SQL scope clauses prevent unrelated content being loaded into application memory.
+    // SQL scope clauses restrict rows returned to the authorized read layer.
     const clauses = ["(0"];
     const values: unknown[] = [];
     for (const s of sources) {
@@ -541,8 +550,8 @@ export class Store {
       if (!hasMore) position = snapshot;
     } else {
       if (args.query) {
-        clauses.push("AND instr(lower(text),lower(?))>0");
-        values.push(args.query);
+        clauses.push("AND instr(bridge_lower(text),?)>0");
+        values.push(searchText(args.query));
       }
       // Persistent rowid gives a stable insertion-order traversal; edits do not move entries.
       const rows = this.db

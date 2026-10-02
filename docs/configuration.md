@@ -1,6 +1,6 @@
 # Configuration
 
-`BRIDGE_CONFIG` names a private JSON configuration outside the checkout. `npm run setup` creates `config.json` in the application state directory: the platform home directory's `.local/share/discord-context-bridge` by default, or `BRIDGE_STATE_DIR`. The initial credential helper targets Unix/Linux state and file permissions; other OS credential integrations are untested. Setup resolves filesystem aliases and rejects state inside a Git checkout before creating directories or credentials. Keep this directory owner-only and files mode 0600. Do not commit the resulting configuration, credentials or database.
+`BRIDGE_CONFIG` names a private JSON configuration outside the checkout. `npm run setup` creates `config.json` in the application state directory: the platform home directory's `.local/share/discord-context-bridge` by default, or `BRIDGE_STATE_DIR`. The initial credential helper targets Unix/Linux state and file permissions; other OS credential integrations are untested. Setup resolves filesystem aliases and rejects state inside a Git checkout before creating directories or credentials. Generated configuration/database paths and credential storage retain that canonical directory for the setup command, including the default rotation path. Keep this directory owner-only and files mode 0600. Do not commit the resulting configuration, credentials or database.
 
 ## Service fields
 

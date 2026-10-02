@@ -15,6 +15,9 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveSecret, readSecret } from "../packages/service/src/secrets.js";
+import { createLocalConfiguration } from "../packages/service/src/setup.js";
+import { configSchema } from "../packages/service/src/config.js";
+import { Store } from "../packages/service/src/store.js";
 test("synthetic secrets fallback is private, rejects overwrite/shared files and never needs a real keyring", async () => {
   const dir = await mkdtemp(join(tmpdir(), "bridge-secret-"));
   const previous = process.env.BRIDGE_STATE_DIR;
@@ -46,6 +49,46 @@ test("synthetic secrets fallback is private, rejects overwrite/shared files and 
     await assert.rejects(
       saveSecret("PERSONAL_DISCORD_TOKEN", "synthetic", false, noKeyring),
     );
+  } finally {
+    if (previous === undefined) delete process.env.BRIDGE_STATE_DIR;
+    else process.env.BRIDGE_STATE_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+test("generated configuration and credentials stay canonical after a safe alias is retargeted", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bridge-setup-alias-"));
+  const previous = process.env.BRIDGE_STATE_DIR;
+  const safe = join(dir, "private");
+  const checkout = join(dir, "checkout");
+  const alias = join(dir, "alias");
+  const noKeyring = async () => {
+    throw new Error("synthetic-keyring-unavailable");
+  };
+  try {
+    await mkdir(safe, { mode: 0o700 });
+    await mkdir(checkout, { mode: 0o700 });
+    await promisify(execFile)("git", ["init", "--quiet", checkout]);
+    await symlink(safe, alias);
+    process.env.BRIDGE_STATE_DIR = join(alias, "state");
+    let retargeted = false;
+    const path = await createLocalConfiguration(async (name, value) => {
+      if (!retargeted) {
+        await rm(alias);
+        await symlink(checkout, alias);
+        retargeted = true;
+      }
+      return saveSecret(name, value, false, noKeyring);
+    });
+    assert.equal(path, join(safe, "state", "config.json"));
+    assert.equal(process.env.BRIDGE_STATE_DIR, join(safe, "state"));
+    const config = configSchema.parse(JSON.parse(await readFile(path, "utf8")));
+    assert.equal(config.database, join(safe, "state", "bridge.sqlite"));
+    const store = new Store(config);
+    store.close();
+    assert((await lstat(config.database)).isFile());
+    for (const name of ["BRIDGE_PRODUCER_TOKEN", "BRIDGE_READER_TOKEN"])
+      assert((await readSecret(name, noKeyring)).length > 0);
+    await assert.rejects(lstat(join(checkout, "state")), { code: "ENOENT" });
   } finally {
     if (previous === undefined) delete process.env.BRIDGE_STATE_DIR;
     else process.env.BRIDGE_STATE_DIR = previous;

@@ -1,0 +1,28 @@
+{
+  "ownerId": "example-owner",
+  "port": 8787,
+  "publicUrl": "http://127.0.0.1:8787",
+  "remote": false,
+  "database": "REPLACE_WITH_PRIVATE_STATE_PATH/bridge.sqlite",
+  "retentionDays": 7,
+  "cursorTtlSeconds": 900,
+  "sources": [
+    {
+      "id": "server-reader",
+      "type": "bot",
+      "accountId": "REPLACE_BOT_ACCOUNT_ID",
+      "enabled": false,
+      "generation": 1,
+      "conversations": []
+    },
+    {
+      "id": "personal-client",
+      "type": "personal",
+      "accountId": "REPLACE_PERSONAL_ACCOUNT_ID",
+      "enabled": false,
+      "generation": 1,
+      "conversations": []
+    }
+  ],
+  "auth": { "mode": "local", "credentials": [] }
+}

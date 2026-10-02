@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["packages/**/*.ts", "tests/**/*.ts", "examples/**/*.ts"],
+  "exclude": ["packages/plugin/src/vencord.ts", "packages/plugin/src/native.ts"]
+}

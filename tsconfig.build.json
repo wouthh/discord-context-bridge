@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["packages/**/*.ts", "examples/**/*.ts"],
+  "exclude": [
+    "packages/plugin/src/vencord.ts",
+    "tests",
+    "packages/plugin/src/native.ts"
+  ]
+}

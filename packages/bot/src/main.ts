@@ -10,7 +10,11 @@ import {
 import { sourceSchema, type Source } from "../../domain/src/index.js";
 import { DeliveryQueue } from "../../sources/src/queue.js";
 import { requestWithDeadline } from "./transport.js";
-import { processPendingRevocations } from "./revocation.js";
+import {
+  beginGuildRevocation,
+  beginRevocation,
+  processPendingRevocations,
+} from "./revocation.js";
 import { readSecret } from "../../service/src/secrets.js";
 import {
   boundedSetting,
@@ -76,14 +80,19 @@ async function main() {
       return false;
     return canRead(channel.permissionsFor(client.user)?.bitfield ?? null);
   }
-  function revoke(channelId: string) {
-    if (!source || revoked.has(channelId)) return;
-    revoked.add(channelId);
-    pending.set(channelId, source);
-    source = {
-      ...source,
-      conversations: source.conversations.filter((c) => c.id !== channelId),
-    };
+  function revoke(channelId: string, expected = source) {
+    applyRevocation(
+      beginRevocation(source, channelId, revoked, pending, expected),
+    );
+  }
+  function revokeGuild(guildId: string, expected = source) {
+    applyRevocation(
+      beginGuildRevocation(source, guildId, revoked, pending, expected),
+    );
+  }
+  function applyRevocation(next: Source | null) {
+    if (!next) return;
+    source = next;
     // Abort in-flight export and clear every queued body before attempting remote revocation.
     metadata.clear();
     queue?.configure(source);
@@ -106,28 +115,30 @@ async function main() {
       for (const guildId of new Set(
         current.conversations.map((c) => c.guildId),
       )) {
+        if (source !== current) return;
         if (!guildId) continue;
         const guild = client.guilds.cache.get(guildId);
         if (!guild) {
-          for (const c of current.conversations)
-            if (c.guildId === guildId) revoke(c.id);
+          revokeGuild(guildId, current);
           continue;
         }
         try {
           await guild.members.fetchMe({ force: true });
         } catch (error) {
+          if (source !== current) return;
           if (!accessLost(error)) throw error;
-          for (const c of current.conversations)
-            if (c.guildId === guildId) revoke(c.id);
+          revokeGuild(guildId, current);
           return;
         }
       }
       for (const c of current.conversations) {
+        if (source !== current) return;
         try {
           await client.channels.fetch(c.id, { force: true });
         } catch (error) {
+          if (source !== current) return;
           if (!accessLost(error)) throw error;
-          revoke(c.id);
+          revoke(c.id, current);
           return;
         }
         if (source !== current) return;
@@ -173,6 +184,7 @@ async function main() {
     )
       return;
     for (const conversation of current.conversations) {
+      if (source !== current) return;
       try {
         const channel = await client.channels.fetch(conversation.id);
         if (source !== current) return;
@@ -191,7 +203,8 @@ async function main() {
           if (message.createdTimestamp >= Date.now() - retentionMs)
             capture(message, "upsert");
       } catch (error) {
-        if (accessLost(error)) revoke(conversation.id);
+        if (source !== current) return;
+        if (accessLost(error)) revoke(conversation.id, current);
         queue?.connected(false);
         console.error("BOT_HISTORY_UNAVAILABLE");
       }
@@ -291,8 +304,7 @@ async function main() {
   });
   client.on(Events.ChannelDelete, (channel) => revoke(channel.id));
   client.on(Events.GuildDelete, (guild) => {
-    for (const c of source?.conversations ?? [])
-      if (c.guildId === guild.id) revoke(c.id);
+    revokeGuild(guild.id);
   });
   client.on(Events.GuildRoleUpdate, () => {
     void checkPermissions().catch(() => queue?.pause());

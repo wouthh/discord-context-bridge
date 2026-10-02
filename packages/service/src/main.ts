@@ -3,7 +3,7 @@ import { Store } from "./store.js";
 import { createApp } from "./http.js";
 process.umask(0o077);
 try {
-  const config = loadConfig();
+  const config = await loadConfig();
   const store = new Store(config);
   const server = createApp(store).listen(
     config.port,

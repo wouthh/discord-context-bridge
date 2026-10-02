@@ -82,6 +82,8 @@ Use local control to revoke the affected source/conversation before replacing it
 
 On-disk SQLite paths are canonicalized before opening and must remain outside Git in an owner-only directory. Existing database/WAL/SHM files must be private, regular and single-link; final symlinks and unsafe sidecars are rejected. Safe parent aliases are resolved once and the service uses the canonical filename. `:memory:` is intended for synthetic tests.
 
+Service and owner-control startup validate the runtime configuration through the same canonical private-file checks before parsing it. Read-only owner files are supported; final symlinks, hard links, shared files/directories and Git paths are rejected with fixed diagnostics.
+
 Local credential rotation requires an existing owner-only regular configuration file in an owner-only directory outside Git, including when `BRIDGE_CONFIG` overrides the default. Final file symlinks, shared files and hard links are rejected; safe parent aliases are canonicalized and the validated file handle stays pinned throughout rotation.
 
 Reset a bot token in Discord's Developer Portal and enter its replacement with `npm run setup`. OS keyring entries can be updated by setup; owner-only fallback files deliberately refuse implicit overwrite; explicit setup replacement/rotation validates private file ownership. Use the explicit setup rotation/replacement action after revocation; stop the connector first, then restart with the updated local hash. Preserve unrelated state. Never paste secrets into diagnostics or tickets.

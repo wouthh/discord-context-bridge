@@ -1,4 +1,5 @@
 import { z } from "zod";
+export const MAX_INGEST_BYTES = 1024 * 1024;
 export const id = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/);
 export const timestamp = z.number().int().nonnegative().max(8640000000000000);
 export const sourceSchema = z

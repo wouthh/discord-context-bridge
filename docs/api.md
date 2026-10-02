@@ -34,8 +34,8 @@ Consumers may poll `read_changes` and `connection_status` with their own bounded
 
 Producer tokens use a separate role/audience/scope:
 
-- `GET /v1/producer-scope`: returns only assigned sources, each with configured account, generation and selected conversations.
-- `POST /v1/ingest`: `{ "events": [...], "health": {...} }`; at most 100 events and 1 MiB JSON. Returns `{ "accepted": number }`.
+- `GET /v1/producer-scope`: returns only assigned sources, each with configured account, generation and conversations permitted by the producer grant. Top-level `conversationScopeComplete` is true only for an unrestricted conversation grant and describes the configured allowlist view, never message-history completeness. When false, an absent conversation may be hidden by authentication scope and cannot confirm source revocation or purge; no unauthorized IDs are revealed.
+- `POST /v1/ingest`: `{ "events": [...], "health": {...} }`; at most 100 events and 1 MiB of UTF-8 JSON including its envelope. Source queues bound batches by both event count and encoded bytes, including escaped text. Returns `{ "accepted": number }`.
 - `POST /v1/source-control`: `{ "sourceId", "accountId", "generation", "action": "purge" | "revoke", "conversationId"?: ... }`. Returns the revised source. Revocation removes a conversation or disables the source; purge clears data while preserving selection. Both advance generation and invalidate cursors.
 
 An event has `eventId`, `sourceId`, `accountId`, `conversationId`, `generation`, `messageId`, `observedAt`, `revision`, `op`; upserts also have `createdAt`, `authorId`, `text` (max 8000 characters). Deletes contain no body or author. A producer may mark an unrepresentable observed edit with `reason: "unavailable_edit"`; it removes the old body without claiming Discord deleted the message, and complete observations with a source revision newer than the tombstone observation can restore it. Change tombstones retain this reason. Health has `sourceId`, `accountId`, `generation`, `connected`, `paused`, `lastObservedAt`, `gapSince`, `overflow`, `queueDepth`. No owner field is accepted.

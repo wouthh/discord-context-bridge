@@ -7,6 +7,7 @@ import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import {
   BridgeError,
+  MAX_INGEST_BYTES,
   id,
   readSchema,
   type Principal,
@@ -98,7 +99,7 @@ export function createApp(store: Store, verify = authenticator(store.config)) {
     }
     next();
   });
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: MAX_INGEST_BYTES }));
   if (store.config.auth.mode === "jwt") {
     const a = store.config.auth;
     app.get("/.well-known/oauth-protected-resource/mcp", (_req, res) =>

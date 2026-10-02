@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   sourceSchema,
   allowed,
@@ -222,6 +223,7 @@ export function sourceMatches(
   selected: Source,
   remote: Source,
   minimumGeneration = 0,
+  conversationScopeComplete = false,
 ) {
   return (
     selected.type === "personal" &&
@@ -232,6 +234,7 @@ export function sourceMatches(
     selected.accountId === remote.accountId &&
     selected.generation === remote.generation &&
     remote.generation >= minimumGeneration &&
+    (minimumGeneration === 0 || conversationScopeComplete === true) &&
     new Set(selected.conversations.map((c) => c.id)).size ===
       selected.conversations.length &&
     new Set(remote.conversations.map((c) => c.id)).size ===
@@ -241,4 +244,152 @@ export function sourceMatches(
       remote.conversations.some((r) => r.id === c.id),
     )
   );
+}
+
+export type ControlRetryPlan =
+  | { state: "blocked" }
+  | { state: "acknowledged" }
+  | { state: "send"; generation: number };
+/** Only explicit control attempts call this; generation changes alone never prove purge. */
+export function planControlRetry(
+  original: Source,
+  action: "purge" | "revoke",
+  conversationId: string | undefined,
+  remote: Source | undefined,
+  conversationScopeComplete = false,
+): ControlRetryPlan {
+  const parsed = sourceSchema.safeParse(remote);
+  if (!parsed.success) return { state: "blocked" };
+  remote = parsed.data;
+  if (
+    new Set(original.conversations.map((c) => c.id)).size !==
+      original.conversations.length ||
+    new Set(remote.conversations.map((c) => c.id)).size !==
+      remote.conversations.length
+  )
+    return { state: "blocked" };
+  if (
+    original.type !== "personal" ||
+    remote.id !== original.id ||
+    remote.type !== original.type ||
+    remote.accountId !== original.accountId ||
+    remote.generation < original.generation
+  )
+    return { state: "blocked" };
+  if (
+    conversationId &&
+    !original.conversations.some((c) => c.id === conversationId)
+  )
+    return { state: "blocked" };
+  const targetVisible = conversationId
+    ? remote.conversations.some((c) => c.id === conversationId)
+    : false;
+  if (
+    action === "revoke" &&
+    remote.generation > original.generation &&
+    conversationScopeComplete === true &&
+    (conversationId ? !targetVisible : !remote.enabled)
+  )
+    return { state: "acknowledged" };
+  if (conversationId) {
+    if (!targetVisible) return { state: "blocked" };
+  } else {
+    // Never replay a whole-source operation against a widened or projected scope.
+    if (
+      conversationScopeComplete !== true ||
+      original.conversations.length !== remote.conversations.length ||
+      !original.conversations.every((c) =>
+        remote.conversations.some(
+          (r) => r.id === c.id && r.guildId === c.guildId,
+        ),
+      )
+    )
+      return { state: "blocked" };
+  }
+  return { state: "send", generation: remote.generation };
+}
+
+const controlBarrierSchema = z
+  .object({
+    version: z.literal(1),
+    endpoint: z.string().max(2048),
+    original: sourceSchema.extend({
+      enabled: z.boolean(),
+      generation: z.number().int().positive(),
+    }),
+    action: z.enum(["purge", "revoke"]),
+    conversationId: z
+      .string()
+      .regex(/^[a-zA-Z0-9_-]{1,80}$/)
+      .optional(),
+    confirmed: z.boolean(),
+    minimumGeneration: z.number().int().positive(),
+  })
+  .strict()
+  .refine(
+    (b) =>
+      b.original.type === "personal" &&
+      b.minimumGeneration > b.original.generation &&
+      new Set(b.original.conversations.map((c) => c.id)).size ===
+        b.original.conversations.length &&
+      (!b.conversationId ||
+        b.original.conversations.some((c) => c.id === b.conversationId)),
+    "invalid_control_barrier",
+  );
+export type ControlBarrier = z.infer<typeof controlBarrierSchema>;
+export function parseControlBarrier(value: string): ControlBarrier | null {
+  if (!value) return null;
+  const barrier = controlBarrierSchema.parse(JSON.parse(value));
+  if (connectorUrl(barrier.endpoint) !== barrier.endpoint)
+    throw new Error("invalid_control_origin");
+  return barrier;
+}
+export function createControlBarrier(
+  original: Source,
+  action: "purge" | "revoke",
+  endpoint: string,
+  conversationId?: string,
+): ControlBarrier {
+  return parseControlBarrier(
+    JSON.stringify({
+      version: 1,
+      endpoint: connectorUrl(endpoint),
+      original,
+      action,
+      ...(conversationId ? { conversationId } : {}),
+      confirmed: false,
+      minimumGeneration: original.generation + 1,
+    }),
+  )!;
+}
+export function confirmControlBarrier(
+  barrier: ControlBarrier,
+  generation: number,
+): ControlBarrier {
+  if (
+    !Number.isSafeInteger(generation) ||
+    generation <= barrier.original.generation
+  )
+    throw new Error("control_generation_unconfirmed");
+  return parseControlBarrier(
+    JSON.stringify({
+      ...barrier,
+      confirmed: true,
+      minimumGeneration: Math.max(barrier.minimumGeneration, generation),
+    }),
+  )!;
+}
+export function controlBarrierMinimum(
+  barrier: ControlBarrier | null,
+  source: Source,
+  endpoint: string,
+) {
+  if (!barrier) return 0;
+  if (!barrier.confirmed) throw new Error("control_unconfirmed");
+  return barrier.endpoint === connectorUrl(endpoint) &&
+    barrier.original.id === source.id &&
+    barrier.original.accountId === source.accountId &&
+    barrier.original.type === source.type
+    ? barrier.minimumGeneration
+    : 0;
 }

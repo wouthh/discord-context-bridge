@@ -94,4 +94,45 @@ export declare function sourceMatches(
   selected: Source,
   remote: Source,
   minimumGeneration?: number,
+  conversationScopeComplete?: boolean,
 ): boolean;
+
+export type ControlRetryPlan =
+  | { state: "blocked" }
+  | { state: "acknowledged" }
+  | { state: "send"; generation: number };
+export declare function planControlRetry(
+  original: Source,
+  action: "purge" | "revoke",
+  conversationId: string | undefined,
+  remote: Source | undefined,
+  conversationScopeComplete?: boolean,
+): ControlRetryPlan;
+
+export type ControlBarrier = {
+  version: 1;
+  endpoint: string;
+  original: Source;
+  action: "purge" | "revoke";
+  conversationId?: string;
+  confirmed: boolean;
+  minimumGeneration: number;
+};
+export declare function parseControlBarrier(
+  value: string,
+): ControlBarrier | null;
+export declare function createControlBarrier(
+  original: Source,
+  action: "purge" | "revoke",
+  endpoint: string,
+  conversationId?: string,
+): ControlBarrier;
+export declare function confirmControlBarrier(
+  barrier: ControlBarrier,
+  generation: number,
+): ControlBarrier;
+export declare function controlBarrierMinimum(
+  barrier: ControlBarrier | null,
+  source: Source,
+  endpoint: string,
+): number;

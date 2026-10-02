@@ -12,6 +12,25 @@ const page = (s: Store, op = "read_messages", input = {}) =>
     cursor: string | null;
     hasMore: boolean;
   };
+test("producer scope identifies grant-filtered coverage without revealing excluded conversations", () => {
+  const store = new Store(config(), () => now);
+  try {
+    const complete = store.producerScope(producer);
+    assert.equal(complete.conversationScopeComplete, true);
+    assert.equal(complete.sources[0].conversations.length, 2);
+    const restricted = store.producerScope({
+      ...producer,
+      conversationIds: ["selected-b"],
+    });
+    assert.equal(restricted.conversationScopeComplete, false);
+    assert.deepEqual(restricted.sources[0].conversations, [
+      { id: "selected-b" },
+    ]);
+    assert(!JSON.stringify(restricted).includes("selected-a"));
+  } finally {
+    store.close();
+  }
+});
 test("ingestion, duplicate delivery, edit, delayed history and irreversible observed deletion", () => {
   const s = new Store(config(), () => now);
   try {

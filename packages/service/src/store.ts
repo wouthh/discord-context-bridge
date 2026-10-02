@@ -131,6 +131,7 @@ export class Store {
   producerScope(p: Principal) {
     this.assert(p, "producer");
     return {
+      conversationScopeComplete: p.conversationIds === undefined,
       sources: this.sources()
         .filter((s) => p.sourceIds.includes(s.id))
         .map((s) => ({

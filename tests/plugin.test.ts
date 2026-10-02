@@ -287,3 +287,24 @@ test("duplicate conversation selections cannot fake an exact remote scope", () =
     false,
   );
 });
+
+test("persisted revocation barrier requires a complete source view after restart", () => {
+  const selected = {
+    ...source,
+    generation: 2,
+    conversations: [{ id: "selected" }],
+  };
+  // A grant narrowed to selected projects away a still-enabled old conversation.
+  // An unrelated generation bump does not acknowledge its global revocation.
+  const projected = { ...selected };
+  assert.equal(sourceMatches(selected, projected, 2), false);
+  assert.equal(sourceMatches(selected, projected, 2, false), false);
+  assert.equal(sourceMatches(selected, projected, 2, true), true);
+  const complete = {
+    ...selected,
+    conversations: [{ id: "selected" }, { id: "old" }],
+  };
+  assert.equal(sourceMatches(selected, complete, 2, true), false);
+  // An initial scoped producer can still observe its explicit permitted subset.
+  assert.equal(sourceMatches(selected, projected, 0, false), true);
+});

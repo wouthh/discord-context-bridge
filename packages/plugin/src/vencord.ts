@@ -5,6 +5,12 @@ import {
   PersonalCapture,
   connectorUrl,
   sourceMatches,
+  planControlRetry,
+  parseControlBarrier,
+  createControlBarrier,
+  confirmControlBarrier,
+  controlBarrierMinimum,
+  type ControlBarrier,
   type ClientEvent,
 } from "./core";
 const Native = VencordNative.pluginHelpers.DiscordContextBridge as PluginNative<
@@ -16,14 +22,13 @@ let epoch = 0;
 let activeEndpoint = "";
 let revocation: Promise<void> | undefined;
 let controlBusy = false;
-let pendingControl:
-  { endpoint: string; key: string; payload: string } | undefined;
+let pendingControl: { barrier: ControlBarrier; key: string } | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
 let status = "Paused. No credential loaded.";
 const settings = definePluginSettings({
   revokeBarrier: {
     type: OptionType.STRING,
-    description: "Required remote revocation barrier",
+    description: "Content-free original control metadata and confirmation",
     default: "",
     hidden: true,
   },
@@ -105,13 +110,49 @@ async function retryControl() {
   if (!pending || controlBusy) return;
   controlBusy = true;
   try {
-    await Native.request(
-      pending.endpoint,
+    const scope = await Native.request(
+      pending.barrier.endpoint,
       pending.key,
-      "/v1/source-control",
-      pending.payload,
+      "/v1/producer-scope",
     );
-    if (pendingControl === pending) pendingControl = undefined;
+    if (pendingControl !== pending) return;
+    const remote = Array.isArray(scope?.sources)
+      ? scope.sources.find(
+          (s: ReturnType<typeof source>) =>
+            s.id === pending.barrier.original.id,
+        )
+      : undefined;
+    const plan = planControlRetry(
+      pending.barrier.original,
+      pending.barrier.action,
+      pending.barrier.conversationId,
+      remote,
+      scope?.conversationScopeComplete === true,
+    );
+    if (plan.state === "blocked") throw new Error("control_scope_changed");
+    if (plan.state === "send")
+      await Native.request(
+        pending.barrier.endpoint,
+        pending.key,
+        "/v1/source-control",
+        JSON.stringify({
+          sourceId: pending.barrier.original.id,
+          accountId: pending.barrier.original.accountId,
+          generation: plan.generation,
+          action: pending.barrier.action,
+          ...(pending.barrier.conversationId
+            ? { conversationId: pending.barrier.conversationId }
+            : {}),
+        }),
+      );
+    if (pendingControl !== pending) return;
+    const generation =
+      plan.state === "send" ? plan.generation + 1 : remote.generation;
+    settings.store.revokeBarrier = JSON.stringify(
+      confirmControlBarrier(pending.barrier, generation),
+    );
+    pendingControl = undefined;
+    capture = undefined;
     status =
       "Remote control acknowledged. Owner must configure enabled scope/current generation before Resume.";
   } catch {
@@ -121,39 +162,47 @@ async function retryControl() {
     controlBusy = false;
   }
 }
+function beginControl(
+  original: PersonalCapture["queue"]["source"],
+  action: "purge" | "revoke",
+  endpoint: string,
+  key: string,
+  conversationId?: string,
+) {
+  try {
+    const existing = parseControlBarrier(settings.store.revokeBarrier);
+    if (pendingControl || (existing && !existing.confirmed)) {
+      status =
+        "Original control remains unconfirmed. Retry it or recover with its manually entered credential; new controls cannot overwrite it.";
+      return;
+    }
+    const barrier = createControlBarrier(
+      original,
+      action,
+      endpoint,
+      conversationId,
+    );
+    settings.store.revokeBarrier = JSON.stringify(barrier);
+    capture = undefined;
+    if (!key) {
+      status =
+        "Original control metadata saved; export stopped. Enter its producer credential and Resume to recover it.";
+      return;
+    }
+    pendingControl = { barrier, key };
+    status = "Original control pending; export stopped.";
+    revocation = retryControl();
+  } catch {
+    status =
+      "Stored control metadata invalid. Export stopped; owner recovery required.";
+  }
+}
 function scopeChange() {
-  const old = capture?.queue.source;
-  const key = token;
-  const endpoint = activeEndpoint;
+  const old = capture?.queue.source,
+    key = token,
+    endpoint = activeEndpoint;
   pause();
-  if (!old || !endpoint) return;
-  settings.store.revokeBarrier = JSON.stringify({
-    sourceId: old.id,
-    endpoint,
-    generation: old.generation + 1,
-  });
-  if (pendingControl) {
-    status =
-      "Remote control pending. Export stopped; retry/confirm revocation before Resume.";
-    return;
-  }
-  if (!key) {
-    status =
-      "Remote revocation UNCONFIRMED. Use owner control; required new generation recorded.";
-    return;
-  }
-  pendingControl = {
-    endpoint,
-    key,
-    payload: JSON.stringify({
-      sourceId: old.id,
-      accountId: old.accountId,
-      generation: old.generation,
-      action: "revoke",
-    }),
-  };
-  status = "Scope changed: remote revocation pending; export stopped.";
-  revocation = retryControl();
+  if (old && endpoint) beginControl(old, "revoke", endpoint, key);
 }
 async function resume(credential: string) {
   pause();
@@ -161,6 +210,16 @@ async function resume(credential: string) {
   try {
     if (revocation) await revocation;
     if (pendingControl) throw new Error("remote_control_unconfirmed");
+    if (!credential || credential.length > 4096)
+      throw new Error("invalid_credential");
+    const barrier = parseControlBarrier(settings.store.revokeBarrier);
+    if (barrier && !barrier.confirmed) {
+      pendingControl = { barrier, key: credential };
+      status = "Recovering original control only; no observation or export.";
+      revocation = retryControl();
+      await revocation;
+      return;
+    }
     const endpoint = connectorUrl(settings.store.endpoint);
     const cfg = source();
     const remote = await Native.request(
@@ -168,18 +227,18 @@ async function resume(credential: string) {
       credential,
       "/v1/producer-scope",
     );
-    let minimum = 0;
-    try {
-      const barrier = JSON.parse(settings.store.revokeBarrier);
-      if (barrier.sourceId === cfg.id && barrier.endpoint === endpoint)
-        minimum = barrier.generation;
-    } catch {}
+    const minimum = controlBarrierMinimum(barrier, cfg, endpoint);
     if (
       attempt !== epoch ||
       !remote ||
       !Array.isArray(remote.sources) ||
       !remote.sources.some((s: ReturnType<typeof source>) =>
-        sourceMatches(cfg, s, minimum),
+        sourceMatches(
+          cfg,
+          s,
+          minimum,
+          remote.conversationScopeComplete === true,
+        ),
       )
     )
       throw new Error("remote_scope_mismatch");
@@ -244,35 +303,19 @@ async function control(action: "purge" | "revoke", conversationId?: string) {
   const credential = token;
   const cfg = capture?.queue.source ?? source();
   const endpoint = activeEndpoint || connectorUrl(settings.store.endpoint);
-  if (action === "revoke")
-    settings.store.revokeBarrier = JSON.stringify({
-      sourceId: cfg.id,
-      endpoint,
-      generation: cfg.generation + 1,
-    });
   pause();
-  if (pendingControl) {
-    status = "Remote control already pending; use Retry remote control.";
-    return;
+  beginControl(cfg, action, endpoint, credential, conversationId);
+  if (revocation) await revocation;
+}
+function recoveryStatus() {
+  try {
+    const barrier = parseControlBarrier(settings.store.revokeBarrier);
+    return barrier && !barrier.confirmed
+      ? `Original ${barrier.action} pending for ${barrier.original.id} at ${barrier.endpoint}. Resume uses the entered credential only for that original control; then enter the desired source credential separately.`
+      : "";
+  } catch {
+    return "Stored control metadata invalid. Export blocked; owner recovery required.";
   }
-  if (!credential) {
-    status =
-      "Remote control UNCONFIRMED. Use owner command or authenticate Resume first.";
-    return;
-  }
-  pendingControl = {
-    endpoint,
-    key: credential,
-    payload: JSON.stringify({
-      sourceId: cfg.id,
-      accountId: cfg.accountId,
-      generation: cfg.generation,
-      action,
-      ...(conversationId ? { conversationId } : {}),
-    }),
-  };
-  revocation = retryControl();
-  await revocation;
 }
 function Panel() {
   const [credential, setCredential] = React.useState("");
@@ -285,6 +328,7 @@ function Panel() {
     "div",
     {},
     React.createElement("p", {}, status),
+    React.createElement("p", {}, recoveryStatus()),
     React.createElement(
       "p",
       {},

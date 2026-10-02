@@ -26,7 +26,8 @@ export async function request(
     !["/v1/ingest", "/v1/source-control", "/v1/producer-scope"].includes(
       path,
     ) ||
-    payload.length > 1000000 ||
+    // Match the protocol HTTP ingress ceiling; source is copied standalone.
+    Buffer.byteLength(payload, "utf8") > 1024 * 1024 ||
     token.length > 4096 ||
     !token
   )

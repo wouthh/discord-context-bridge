@@ -1,12 +1,5 @@
 import { spawn } from "node:child_process";
-import {
-  readFile,
-  writeFile,
-  mkdir,
-  lstat,
-  realpath,
-  open,
-} from "node:fs/promises";
+import { mkdir, lstat, realpath, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { constants } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
@@ -172,29 +165,39 @@ export async function saveSecret(
     return "os-keyring";
   } catch {
     const path = join(await privateStateDir(), `${name}.secret`);
-    if (replace) {
-      try {
-        const m = await lstat(path);
-        if (
-          !m.isFile() ||
-          m.uid !== process.getuid?.() ||
-          (m.mode & 0o077) !== 0
-        )
-          throw new Error("credential_permissions_invalid");
-      } catch (e) {
-        if (!(e && typeof e === "object" && "code" in e && e.code === "ENOENT"))
-          throw e;
-      }
+    const flags =
+      constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+    const create = () =>
+      open(path, flags | constants.O_CREAT | constants.O_EXCL, 0o600);
+    const file = replace
+      ? await open(path, flags).catch((error: unknown) => {
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+            return create();
+          throw error;
+        })
+      : await create();
+    try {
+      const meta = await file.stat();
+      if (
+        !meta.isFile() ||
+        meta.uid !== process.getuid?.() ||
+        (meta.mode & 0o077) !== 0 ||
+        meta.nlink !== 1
+      )
+        throw new Error("credential_permissions_invalid");
+      // Opening without O_TRUNC preserves rejected files. Keep the validated
+      // single-link inode pinned; this fresh handle's write position is zero.
+      await file.writeFile(value, "utf8");
+      await file.truncate(Buffer.byteLength(value, "utf8"));
+      await file.sync();
+    } finally {
+      await file.close();
     }
-    await writeFile(path, value, {
-      mode: 0o600,
-      flag: replace
-        ? constants.O_WRONLY |
-          constants.O_TRUNC |
-          constants.O_CREAT |
-          constants.O_NOFOLLOW
-        : "wx",
-    });
     return "owner-only-file";
   }
 }
@@ -208,14 +211,23 @@ export async function readSecret(name: string, io = keyring) {
   }
   try {
     const path = join(await privateStateDir(), `${name}.secret`);
-    const meta = await lstat(path);
-    if (
-      !meta.isFile() ||
-      (meta.mode & 0o077) !== 0 ||
-      meta.uid !== process.getuid?.()
-    )
-      throw new Error();
-    return (await readFile(path, "utf8")).trim();
+    const file = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const meta = await file.stat();
+      if (
+        !meta.isFile() ||
+        (meta.mode & 0o077) !== 0 ||
+        meta.uid !== process.getuid?.() ||
+        meta.nlink !== 1
+      )
+        throw new Error("credential_permissions_invalid");
+      return (await file.readFile("utf8")).trim();
+    } finally {
+      await file.close();
+    }
   } catch {
     throw new Error("credential_unavailable");
   }

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.sqlite*
+.env*
+!.env.example
+config.local.json
+credentials.json
+*.secret

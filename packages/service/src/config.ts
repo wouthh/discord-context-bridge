@@ -84,6 +84,11 @@ export const configSchema = z
     if (!c.remote && !["127.0.0.1", "localhost", "[::1]"].includes(u.hostname))
       ctx.addIssue({ code: "custom", message: "local_requires_loopback" });
     if (
+      !c.remote &&
+      Number(u.port || (u.protocol === "https:" ? 443 : 80)) !== c.port
+    )
+      ctx.addIssue({ code: "custom", message: "local_url_port_must_match" });
+    if (
       c.auth.mode === "jwt" &&
       c.auth.readerAudience === c.auth.producerAudience
     )

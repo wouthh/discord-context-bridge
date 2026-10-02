@@ -76,6 +76,8 @@ The plugin settings select endpoint, personal source ID, account ID, conversatio
 
 Local `http://[::1]:<port>` binds IPv6 loopback; local IPv4/localhost origins use IPv4 loopback. Prefer an explicit IP address when a client resolves localhost differently. Remote operation always binds IPv4 loopback behind the documented TLS proxy.
 
+In local mode the effective `publicUrl` port must equal `port`; mismatches are rejected at setup/startup. An omitted URL port means 80 for HTTP or 443 for HTTPS, so local URLs normally need an explicit allowed listening port. Remote mode permits a different public HTTPS proxy port from the private listening port.
+
 ## Rotation and revocation
 
 Use local control to revoke the affected source/conversation before replacing its producer credentials. For local auth, remove the old hash from private configuration and restart the connector; provision a new private credential/hash pair without printing it. For JWT auth, revoke the issuer grant/credential and remove or narrow the configured bridge grant, then restart. Short token lifetime limits exposure but is not instant issuer revocation checking.

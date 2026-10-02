@@ -80,3 +80,43 @@ test("remote configuration fails closed on insecure URLs, duplicate scopes and c
     !configSchema.safeParse({ ...c, publicUrl: "ftp://localhost" }).success,
   );
 });
+test("authentication metadata URLs cannot embed credentials or query secrets", () => {
+  const baseline = {
+    ...config(),
+    remote: true,
+    publicUrl: "https://bridge.example.invalid",
+    auth: {
+      mode: "jwt",
+      issuer: "https://issuer.example.invalid",
+      jwksUrl: "https://issuer.example.invalid/jwks",
+      readerAudience: "https://bridge.example.invalid/mcp",
+      producerAudience: "https://bridge.example.invalid/ingest",
+      grants: [],
+    },
+  };
+  for (const field of [
+    "issuer",
+    "jwksUrl",
+    "readerAudience",
+    "producerAudience",
+  ]) {
+    const credentialUrl = new URL("https://issuer.example.invalid/");
+    credentialUrl.username = "synthetic";
+    credentialUrl.password = "synthetic";
+    assert(
+      !configSchema.safeParse({
+        ...baseline,
+        auth: { ...baseline.auth, [field]: credentialUrl.href },
+      }).success,
+    );
+    assert(
+      !configSchema.safeParse({
+        ...baseline,
+        auth: {
+          ...baseline.auth,
+          [field]: "https://issuer.example.invalid/?secret=synthetic",
+        },
+      }).success,
+    );
+  }
+});

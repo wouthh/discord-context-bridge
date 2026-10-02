@@ -78,7 +78,16 @@ export const configSchema = z
         c.auth.jwksUrl,
         c.auth.readerAudience,
         c.auth.producerAudience,
-      ].some((v) => new URL(v).protocol !== "https:")
+      ].some((v) => {
+        const u = new URL(v);
+        return (
+          u.protocol !== "https:" ||
+          !!u.username ||
+          !!u.password ||
+          !!u.search ||
+          !!u.hash
+        );
+      })
     )
       ctx.addIssue({ code: "custom", message: "jwt_requires_https" });
     if (new Set(c.sources.map((s) => s.id)).size !== c.sources.length)

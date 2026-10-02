@@ -64,7 +64,7 @@ Remote `auth` is:
 }
 ```
 
-Use an actual external authorization server, distinct audiences and subjects appropriate to its issued tokens. JWTs require RS256 or ES256 signatures, matching issuer/audience, `sub`, `iat`, `exp`, maximum age one hour and `bridge:read` or `bridge:ingest` scope. Configured grants determine owner and source access. The connector verifies tokens with `jose` and does not issue remote tokens, register OAuth clients or implement an authorization-code flow. Confirm your consumer can obtain and present suitable bearer tokens.
+Use an actual external authorization server, distinct audiences and subjects appropriate to its issued tokens. Authentication URLs must use HTTPS without credentials, query strings or fragments; issuer metadata must never contain secrets. JWTs require RS256 or ES256 signatures, matching issuer/audience, `sub`, `iat`, `exp`, maximum age one hour and `bridge:read` or `bridge:ingest` scope. Configured grants determine owner and source access. The connector verifies tokens with `jose` and does not issue remote tokens, register OAuth clients or implement an authorization-code flow. Confirm your consumer can obtain and present suitable bearer tokens.
 
 ## Reader and plugin settings
 

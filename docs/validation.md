@@ -6,7 +6,8 @@ The lockfile records exact dependencies and integrity hashes. Tests create only
 synthetic content in memory or securely created temporary directories.
 
 `npm run check` runs TypeScript, ESLint, formatting, synthetic tests, production
-builds and publication pattern checks. The initial suite passed 40 tests covering
+builds and publication pattern checks. The initial suite passed 45 tests covering
+compatibility-helper symlink isolation, approved-origin CORS preflights,
 capture/ingest/read scopes, owner/account isolation, role and JWT audience/expiry,
 edits, duplicate/out-of-order delivery, deletions, recoverable unavailable edits,
 retention, revocation persistence, concurrent SQLite control, stable insertion

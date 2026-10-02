@@ -1,6 +1,6 @@
 # Configuration
 
-`BRIDGE_CONFIG` names a private JSON configuration outside the checkout. `npm run setup` creates `config.json` in the application state directory: the platform home directory's `.local/share/discord-context-bridge` by default, or `BRIDGE_STATE_DIR`. The initial credential helper targets Unix/Linux state and file permissions; other OS credential integrations are untested. Keep this directory owner-only and files mode 0600. Do not commit the resulting configuration, credentials or database.
+`BRIDGE_CONFIG` names a private JSON configuration outside the checkout. `npm run setup` creates `config.json` in the application state directory: the platform home directory's `.local/share/discord-context-bridge` by default, or `BRIDGE_STATE_DIR`. The initial credential helper targets Unix/Linux state and file permissions; other OS credential integrations are untested. Setup resolves filesystem aliases and rejects state inside a Git checkout before creating directories or credentials. Keep this directory owner-only and files mode 0600. Do not commit the resulting configuration, credentials or database.
 
 ## Service fields
 
@@ -36,7 +36,7 @@ A personal source can use `id: "personal-client"`, `type: "personal"`, an explic
 
 Startup seeds sources only when absent. Persisted revocation survives restart and overrides startup configuration; editing JSON does not silently reauthorize it. An operator-approved `npm run control -- apply-scopes` imports configured scopes, purges existing content, advances generations and invalidates cursors. Use `npm run control -- status` to obtain current generations. Stop producers while applying scopes and configure the plugin's generation explicitly afterward. Narrowing/disabling startup configuration also revokes conflicting stored scopes conservatively.
 
-Browser access requires an exact entry in `origins`. Approved origins receive CORS response headers and bounded unauthenticated OPTIONS preflights for the documented routes, methods and Authorization, Content-Type and MCP-Protocol-Version headers. Actual requests still require the correct bearer role; no cookies or credentialed CORS are enabled. Empty origins denies cross-origin browser access. A configured origin is a browser policy, not an authorization grant.
+Browser access requires an exact canonical HTTP/HTTPS origin in `origins`, such as `https://consumer.example.invalid` without a trailing slash, path, credentials, query or fragment. Noncanonical entries are rejected at setup/startup rather than silently failing to match. Approved origins receive CORS response headers and bounded unauthenticated OPTIONS preflights for the documented routes, methods and Authorization, Content-Type and MCP-Protocol-Version headers. Actual requests still require the correct bearer role; no cookies or credentialed CORS are enabled. Empty origins denies cross-origin browser access. A configured origin is a browser policy, not an authorization grant.
 
 ## Authentication
 

@@ -80,6 +80,30 @@ test("remote configuration fails closed on insecure URLs, duplicate scopes and c
     !configSchema.safeParse({ ...c, publicUrl: "ftp://localhost" }).success,
   );
 });
+test("browser allowlists accept only canonical HTTP origins", () => {
+  for (const origin of [
+    "https://consumer.example.invalid",
+    "https://consumer.example.invalid:8443",
+    "http://127.0.0.1:8787",
+  ]) {
+    assert(configSchema.safeParse({ ...config(), origins: [origin] }).success);
+  }
+  const credentials = new URL("https://consumer.example.invalid");
+  credentials.username = "synthetic";
+  credentials.password = "synthetic";
+  for (const origin of [
+    "https://consumer.example.invalid/",
+    "https://consumer.example.invalid/path",
+    "https://consumer.example.invalid?query=synthetic",
+    "https://consumer.example.invalid#fragment",
+    "https://consumer.example.invalid:443",
+    "ftp://consumer.example.invalid",
+    credentials.href,
+    "invalid",
+  ]) {
+    assert(!configSchema.safeParse({ ...config(), origins: [origin] }).success);
+  }
+});
 test("authentication metadata URLs cannot embed credentials or query secrets", () => {
   const baseline = {
     ...config(),

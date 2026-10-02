@@ -1,26 +1,57 @@
 import { spawn } from "node:child_process";
-import { readFile, writeFile, mkdir, lstat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { constants } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, basename } from "node:path";
 export const stateDir = () =>
   process.env.BRIDGE_STATE_DIR ??
   join(homedir(), ".local", "share", "discord-context-bridge");
-export async function privateStateDir() {
-  const path = resolve(stateDir());
+async function canonicalStatePath(path: string) {
+  let ancestor = path;
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return join(await realpath(ancestor), ...missing);
+    } catch (error) {
+      if (!(
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
+        throw error;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw error;
+      missing.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+}
+async function assertOutsideRepository(path: string) {
   let parent = path;
   while (true) {
     try {
       await lstat(join(parent, ".git"));
       throw new Error("state_inside_repository");
     } catch (error) {
-      if (error instanceof Error && error.message === "state_inside_repository")
+      if (!(
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
         throw error;
     }
     const next = dirname(parent);
-    if (next === parent) break;
+    if (next === parent) return;
     parent = next;
   }
+}
+export async function privateStateDir() {
+  // Resolve aliases through the nearest existing ancestor before creating any
+  // components, then use that canonical path for state and credential files.
+  const path = await canonicalStatePath(resolve(stateDir()));
+  await assertOutsideRepository(path);
   await mkdir(path, { recursive: true, mode: 0o700 });
   const meta = await lstat(path);
   if (
@@ -29,6 +60,7 @@ export async function privateStateDir() {
     (meta.mode & 0o077) !== 0
   )
     throw new Error("state_permissions_invalid");
+  await assertOutsideRepository(await realpath(path));
   return path;
 }
 const names = new Set([

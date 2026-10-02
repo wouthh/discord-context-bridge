@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   sourceSchema,
+  id,
+  timestamp,
   allowed,
   type Source,
   type Observation,
@@ -123,14 +125,23 @@ export class PersonalCapture {
     if (!["MESSAGE_CREATE", "MESSAGE_UPDATE"].includes(event.type))
       return false;
     const msg = event.message;
-    // Keep only bounded metadata from events already observed in scope, never bodies.
-    if (
-      !msg?.id ||
-      typeof msg.content !== "string" ||
-      msg.content.length > 8000
-    )
+    // A valid observed ID is required even for a content-free tombstone.
+    if (!msg || typeof msg.id !== "string" || !id.safeParse(msg.id).success)
       return false;
-    const key = channel + ":" + msg.id;
+    const messageId = msg.id;
+    const key = channel + ":" + messageId;
+    const unavailable = () => {
+      this.metadata.delete(key);
+      this.queue.connected(false);
+      return this.enqueue({
+        ...make(messageId),
+        op: "delete",
+        reason: "unavailable_edit",
+      });
+    };
+    if (typeof msg.content !== "string" || msg.content.length > 8000)
+      return event.type === "MESSAGE_UPDATE" ? unavailable() : false;
+    // Keep only bounded metadata from events already observed in scope, never bodies.
     const known = this.metadata.get(key);
     const authorId = msg.author?.id ?? known?.authorId;
     const created =
@@ -153,23 +164,16 @@ export class PersonalCapture {
       (event.type === "MESSAGE_UPDATE" && !msg.edited_timestamp)
     ) {
       if (event.type !== "MESSAGE_UPDATE") return false;
-      this.metadata.delete(key);
-      this.queue.connected(false);
-      return this.enqueue({
-        ...make(msg.id),
-        op: "delete",
-        reason: "unavailable_edit",
-      });
+      return unavailable();
     }
     if (
-      !Number.isSafeInteger(created) ||
-      created < 0 ||
-      !Number.isSafeInteger(revised) ||
-      revised < 0
+      !id.safeParse(authorId).success ||
+      !timestamp.safeParse(created).success ||
+      !timestamp.safeParse(revised).success
     )
-      return false;
+      return event.type === "MESSAGE_UPDATE" ? unavailable() : false;
     const accepted = this.enqueue({
-      ...make(msg.id),
+      ...make(messageId),
       op: "upsert",
       createdAt: created,
       revision: revised,

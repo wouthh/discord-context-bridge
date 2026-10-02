@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
-import { readFile, writeFile, mkdir, lstat, realpath } from "node:fs/promises";
+import {
+  readFile,
+  writeFile,
+  mkdir,
+  lstat,
+  realpath,
+  open,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { constants } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
@@ -62,6 +69,39 @@ export async function privateStateDir() {
     throw new Error("state_permissions_invalid");
   await assertOutsideRepository(await realpath(path));
   return path;
+}
+/** Open a canonical, private existing configuration; retain this handle during rotation. */
+export async function openPrivateConfiguration(path: string) {
+  const requested = resolve(path);
+  if (!(await lstat(requested)).isFile())
+    throw new Error("configuration_permissions_invalid");
+  const parent = await canonicalStatePath(dirname(requested));
+  await assertOutsideRepository(parent);
+  const directory = await lstat(parent);
+  if (
+    !directory.isDirectory() ||
+    directory.uid !== process.getuid?.() ||
+    (directory.mode & 0o077) !== 0
+  )
+    throw new Error("configuration_permissions_invalid");
+  const file = await open(
+    join(parent, basename(requested)),
+    constants.O_RDWR | constants.O_NOFOLLOW,
+  );
+  try {
+    const meta = await file.stat();
+    if (
+      !meta.isFile() ||
+      meta.uid !== process.getuid?.() ||
+      (meta.mode & 0o077) !== 0 ||
+      meta.nlink !== 1
+    )
+      throw new Error("configuration_permissions_invalid");
+    return file;
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
 }
 const names = new Set([
   "DISCORD_BOT_TOKEN",

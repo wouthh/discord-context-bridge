@@ -19,7 +19,24 @@ export const configSchema = z
     port: z.number().int().min(1024).max(65535).default(8787),
     publicUrl: z.string().url().default("http://127.0.0.1:8787"),
     remote: z.boolean().default(false),
-    origins: z.array(z.string().url()).default([]),
+    origins: z
+      .array(
+        z
+          .string()
+          .url()
+          .refine((value) => {
+            try {
+              const url = new URL(value);
+              return (
+                ["http:", "https:"].includes(url.protocol) &&
+                url.origin === value
+              );
+            } catch {
+              return false;
+            }
+          }, "canonical_browser_origin_required"),
+      )
+      .default([]),
     database: z.string().min(1),
     retentionDays: z.number().int().min(1).max(30).default(7),
     cursorTtlSeconds: z.number().int().min(60).max(3600).default(900),

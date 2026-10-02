@@ -3,7 +3,7 @@ import { Store } from "./store.js";
 process.umask(0o077);
 let store: Store | undefined;
 try {
-  const config = loadConfig();
+  const config = await loadConfig();
   store = new Store(config);
   const action = process.argv[2];
   if (action === "apply-scopes") {

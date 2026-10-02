@@ -64,7 +64,7 @@ export async function privateStateDir() {
   return path;
 }
 /** Open a canonical, private existing configuration; retain this handle during rotation. */
-export async function openPrivateConfiguration(path: string) {
+export async function openPrivateConfiguration(path: string, writable = true) {
   const requested = resolve(path);
   if (!(await lstat(requested)).isFile())
     throw new Error("configuration_permissions_invalid");
@@ -79,7 +79,9 @@ export async function openPrivateConfiguration(path: string) {
     throw new Error("configuration_permissions_invalid");
   const file = await open(
     join(parent, basename(requested)),
-    constants.O_RDWR | constants.O_NOFOLLOW,
+    (writable ? constants.O_RDWR : constants.O_RDONLY) |
+      constants.O_NOFOLLOW |
+      constants.O_NONBLOCK,
   );
   try {
     const meta = await file.stat();

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readFileSync } from "node:fs";
+import { openPrivateConfiguration } from "./secrets.js";
 import { sourceSchema, id } from "../../domain/src/index.js";
 const grant = z
   .object({
@@ -133,11 +133,17 @@ export function loopbackHost(config: Config): "127.0.0.1" | "::1" {
     ? "::1"
     : "127.0.0.1";
 }
-export function loadConfig() {
+export async function loadConfig() {
   try {
-    return configSchema.parse(
-      JSON.parse(readFileSync(process.env.BRIDGE_CONFIG ?? "", "utf8")),
+    const file = await openPrivateConfiguration(
+      process.env.BRIDGE_CONFIG ?? "",
+      false,
     );
+    try {
+      return configSchema.parse(JSON.parse(await file.readFile("utf8")));
+    } finally {
+      await file.close();
+    }
   } catch {
     throw new Error("configuration_invalid");
   }

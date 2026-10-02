@@ -104,6 +104,50 @@ test("browser allowlists accept only canonical HTTP origins", () => {
     assert(!configSchema.safeParse({ ...config(), origins: [origin] }).success);
   }
 });
+test("local advertised ports match the listener while remote proxy ports may differ", () => {
+  for (const host of ["127.0.0.1", "localhost", "[::1]"]) {
+    for (const port of [8787, 9000]) {
+      assert(
+        configSchema.safeParse({
+          ...config(),
+          port,
+          publicUrl: `http://${host}:${port}`,
+        }).success,
+      );
+      assert(
+        !configSchema.safeParse({
+          ...config(),
+          port,
+          publicUrl: `http://${host}:${port + 1}`,
+        }).success,
+      );
+    }
+    for (const publicUrl of [`http://${host}`, `https://${host}`]) {
+      assert(!configSchema.safeParse({ ...config(), publicUrl }).success);
+    }
+  }
+  for (const publicUrl of [
+    "https://bridge.example.invalid",
+    "https://bridge.example.invalid:9443",
+  ]) {
+    assert(
+      configSchema.safeParse({
+        ...config(),
+        port: 9000,
+        publicUrl,
+        remote: true,
+        auth: {
+          mode: "jwt",
+          issuer: "https://issuer.example.invalid",
+          jwksUrl: "https://issuer.example.invalid/jwks",
+          readerAudience: "https://bridge.example.invalid/mcp",
+          producerAudience: "https://bridge.example.invalid/ingest",
+          grants: [],
+        },
+      }).success,
+    );
+  }
+});
 test("authentication metadata URLs cannot embed credentials or query secrets", () => {
   const baseline = {
     ...config(),

@@ -4,8 +4,17 @@ import {
   PersonalCapture,
   connectorUrl,
   sourceMatches,
+  type ClientEvent,
 } from "../packages/plugin/src/core.js";
 import type { Source } from "../packages/domain/src/index.js";
+import { Store } from "../packages/service/src/store.js";
+import {
+  config as storeConfig,
+  source as fixtureSource,
+  producer,
+  reader,
+  now as fixtureNow,
+} from "./fixtures.js";
 const packagedContract: typeof import("../packages/plugin/src/public-api.js").PersonalCapture =
   PersonalCapture;
 void packagedContract;
@@ -307,4 +316,167 @@ test("persisted revocation barrier requires a complete source view after restart
   assert.equal(sourceMatches(selected, complete, 2, true), false);
   // An initial scoped producer can still observe its explicit permitted subset.
   assert.equal(sourceMatches(selected, projected, 0, false), true);
+});
+
+test("content-less delivered update clears exported current body with recoverable tombstone and preserves capture scope", async () => {
+  let clock = fixtureNow;
+  let account = fixtureSource.accountId;
+  const selected = { ...fixtureSource, conversations: [{ id: "selected-a" }] };
+  const cfg = storeConfig();
+  cfg.sources = [selected];
+  const store = new Store(cfg, () => clock);
+  const capture = new PersonalCapture(
+    selected,
+    () => account,
+    () => 1,
+    () => clock,
+  );
+  const delivered = {
+    ...event().message,
+    channel_id: "selected-a",
+    author: { id: "synthetic-author" },
+    timestamp: fixtureNow - 1000,
+    content: "Synthetic original body",
+  };
+  const flush = () =>
+    capture.export(async (events, health) => {
+      store.ingest(producer, events, health);
+    });
+  const page = () =>
+    store.execute(reader, "read_messages") as { items: { text: string }[] };
+  try {
+    capture.resume();
+    assert.equal(
+      capture.observe({ type: "MESSAGE_CREATE", message: delivered }),
+      true,
+    );
+    await flush();
+    assert.equal(page().items[0].text, "Synthetic original body");
+    const prior = store.execute(reader, "read_changes") as { cursor: string };
+    clock++;
+    assert.equal(
+      capture.observe({
+        type: "MESSAGE_UPDATE",
+        message: {
+          id: "message",
+          channel_id: "selected-a",
+          edited_timestamp: clock,
+        },
+      }),
+      true,
+    );
+    await flush();
+    assert.equal(page().items.length, 0);
+    const changes = store.execute(reader, "read_changes", {
+      cursor: prior.cursor,
+    }) as { items: { op: string; reason?: string; message?: unknown }[] };
+    assert.equal(changes.items.length, 1);
+    assert.equal(changes.items[0].op, "delete");
+    assert.equal(changes.items[0].reason, "unavailable_edit");
+    assert.equal(changes.items[0].message, undefined);
+    assert.equal(
+      JSON.stringify(changes).includes("Synthetic original body"),
+      false,
+    );
+    assert.equal(
+      capture.observe({
+        type: "MESSAGE_UPDATE",
+        message: { id: "message", channel_id: "selected-b" },
+      }),
+      false,
+    );
+    account = "different-account";
+    assert.equal(
+      capture.observe({
+        type: "MESSAGE_UPDATE",
+        message: { id: "message", channel_id: "selected-a" },
+      }),
+      false,
+    );
+    assert.equal(capture.queue.status().queueDepth, 0);
+    assert.equal(page().items.length, 0);
+    account = fixtureSource.accountId;
+    capture.resume();
+    clock++;
+    assert.equal(
+      capture.observe({
+        type: "MESSAGE_UPDATE",
+        message: {
+          ...delivered,
+          edited_timestamp: clock,
+          content: "Synthetic newer complete edit",
+        },
+      }),
+      true,
+    );
+    await flush();
+    assert.equal(page().items[0].text, "Synthetic newer complete edit");
+  } finally {
+    store.close();
+  }
+});
+test("unrepresentable update replaces queued body while malformed creates and unidentified updates are rejected", async () => {
+  const variants: [string, Record<string, unknown>][] = [
+    ["missing text", { content: undefined }],
+    ["non-string text", { content: 123 }],
+    ["over-limit text", { content: "x".repeat(8001) }],
+    ["invalid edit timestamp", { edited_timestamp: "not-a-timestamp" }],
+    ["invalid author", { author: { id: "invalid author id" } }],
+  ];
+  for (const [label, patch] of variants) {
+    const capture = new PersonalCapture(
+      source,
+      () => source.accountId,
+      () => 1,
+      () => 2000,
+    );
+    capture.resume();
+    const malformedCreate = {
+      ...event(),
+      message: {
+        ...event().message,
+        ...patch,
+        ...(label === "invalid edit timestamp"
+          ? { timestamp: "not-a-timestamp" }
+          : {}),
+      },
+    } as unknown as ClientEvent;
+    assert.equal(capture.observe(malformedCreate), false, label);
+    assert.equal(capture.observe(event()), true);
+    assert.equal(
+      capture.observe({
+        type: "MESSAGE_UPDATE",
+        message: { ...event().message, edited_timestamp: 1500, ...patch },
+      } as unknown as ClientEvent),
+      true,
+      label,
+    );
+    await capture.export(async (events) => {
+      assert.equal(events.length, 1, label);
+      assert.equal(events[0].op, "delete", label);
+      assert.equal("text" in events[0], false, label);
+      if (events[0].op === "delete")
+        assert.equal(events[0].reason, "unavailable_edit", label);
+    });
+  }
+  const capture = new PersonalCapture(
+    source,
+    () => source.accountId,
+    () => 1,
+    () => 2000,
+  );
+  capture.resume();
+  capture.observe(event());
+  for (const messageId of [undefined, "", "invalid id"])
+    assert.equal(
+      capture.observe({
+        type: "MESSAGE_UPDATE",
+        message: { id: messageId, channel_id: "selected" },
+      }),
+      false,
+    );
+  await capture.export(async (events) => {
+    assert.equal(events.length, 1);
+    assert.equal(events[0].op, "upsert");
+  });
 });

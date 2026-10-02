@@ -192,7 +192,8 @@ test("lost revocation response reconciles authenticated scope and exports the re
       /synthetic-response-lost/,
     );
     assert.equal(pending.size, 1);
-    const refreshed = store.producerScope(producer).sources[0];
+    const refreshedScope = store.producerScope(producer);
+    const refreshed = refreshedScope.sources[0];
     assert.equal(refreshed.generation, 2);
     assert.equal(
       refreshed.conversations.some((c) => c.id === "selected"),
@@ -218,10 +219,15 @@ test("lost revocation response reconciles authenticated scope and exports the re
     )!;
     assert.equal(queue.capture(remaining), true);
     assert.equal(
-      await processPendingRevocations(pending, refreshed, async () => {
-        controls++;
-        throw new Error("unexpected-second-control");
-      }),
+      await processPendingRevocations(
+        pending,
+        refreshed,
+        async () => {
+          controls++;
+          throw new Error("unexpected-second-control");
+        },
+        refreshedScope.conversationScopeComplete,
+      ),
       false,
     );
     assert.equal(pending.size, 0);
@@ -280,5 +286,79 @@ test("revocation acknowledgement requires matching identity, newer generation an
     );
     assert.equal(attempted, true);
     assert.equal(pending.size, 1);
+  }
+});
+test("a filtered producer view cannot acknowledge revocation after unrelated generation movement", async () => {
+  const { processPendingRevocations } =
+    await import("../packages/bot/src/revocation.js");
+  const { Store } = await import("../packages/service/src/store.js");
+  const fixtures = await import("./fixtures.js");
+  const selected: Source = {
+    ...source,
+    conversations: [
+      ...source.conversations,
+      { id: "remaining", guildId: "guild" },
+    ],
+  };
+  const configuration = fixtures.config();
+  configuration.sources = [selected];
+  const fullProducer = { ...fixtures.producer, sourceIds: [selected.id] };
+  const narrowProducer = { ...fullProducer, conversationIds: ["remaining"] };
+  const fullReader = { ...fixtures.reader, sourceIds: [selected.id] };
+  const store = new Store(configuration, () => fixtures.now);
+  const pending = new Map([["selected", selected]]);
+  try {
+    const body = mapMessage(
+      selected,
+      { ...message, createdTimestamp: fixtures.now - 1000 },
+      "upsert",
+      fixtures.now,
+    )!;
+    store.ingest(fullProducer, [body]);
+    // An unrelated purge advances generation without revoking the pending channel.
+    store.control(fullProducer, {
+      sourceId: selected.id,
+      accountId: selected.accountId,
+      generation: selected.generation,
+      action: "purge",
+      conversationId: "remaining",
+    });
+    const scope = store.producerScope(narrowProducer);
+    assert.equal(scope.conversationScopeComplete, false);
+    assert.equal(scope.sources[0].generation, 2);
+    assert.equal(
+      scope.sources[0].conversations.some((c) => c.id === "selected"),
+      false,
+    );
+    let attempted = false;
+    await assert.rejects(
+      processPendingRevocations(
+        pending,
+        scope.sources[0],
+        async (request) => {
+          attempted = true;
+          store.control(narrowProducer, request);
+        },
+        scope.conversationScopeComplete,
+      ),
+      /scope_denied/,
+    );
+    assert.equal(attempted, true);
+    assert.equal(pending.size, 1);
+    const visible = store.execute(fullReader, "read_messages", {}) as {
+      items: { conversationId: string; text: string }[];
+    };
+    assert.equal(visible.items[0].conversationId, "selected");
+    assert.equal(visible.items[0].text, "Synthetic text");
+    // Missing completeness metadata must likewise fail closed.
+    await assert.rejects(
+      processPendingRevocations(pending, scope.sources[0], async (request) => {
+        store.control(narrowProducer, request);
+      }),
+      /scope_denied/,
+    );
+    assert.equal(pending.size, 1);
+  } finally {
+    store.close();
   }
 });

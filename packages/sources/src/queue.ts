@@ -5,6 +5,7 @@ import {
   type SourceHealth,
   sanitizeText,
   eventSchema,
+  MAX_INGEST_BYTES,
 } from "../../domain/src/index.js";
 /** Memory-only bounded queue. A restart discards content and records an offline gap. */
 export class DeliveryQueue {
@@ -124,10 +125,23 @@ export class DeliveryQueue {
       return;
     this.busy = true;
     const epoch = this.epoch;
-    const batch = this.events.slice(0, 100);
+    const health = this.status();
+    const encoder = new TextEncoder();
+    let bytes = encoder.encode(
+      JSON.stringify({ events: [], health }),
+    ).byteLength;
+    const batch: Observation[] = [];
+    for (const event of this.events.slice(0, 100)) {
+      const size =
+        encoder.encode(JSON.stringify(event)).byteLength +
+        (batch.length ? 1 : 0);
+      if (bytes + size > MAX_INGEST_BYTES) break;
+      batch.push(event);
+      bytes += size;
+    }
     this.abort = new AbortController();
     try {
-      await send(batch, this.status(), this.abort.signal);
+      await send(batch, health, this.abort.signal);
       if (epoch === this.epoch) {
         const ids = new Set(batch.map((e) => e.eventId));
         this.events = this.events.filter((e) => !ids.has(e.eventId));

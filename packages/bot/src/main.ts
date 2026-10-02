@@ -201,7 +201,10 @@ async function main() {
     busy = true;
     try {
       const response = await request("/v1/producer-scope");
-      const payload = (await response.json()) as { sources: unknown[] };
+      const payload = (await response.json()) as {
+        sources: unknown[];
+        conversationScopeComplete?: unknown;
+      };
       const next = payload.sources
         .map((s) => sourceSchema.parse(s))
         .find((s) => s.id === sourceId && s.type === "bot");
@@ -241,6 +244,7 @@ async function main() {
         async (control) => {
           await request("/v1/source-control", control);
         },
+        payload.conversationScopeComplete === true,
       );
       if (mutated) {
         // A newly accepted control advances generation. Refresh before export.

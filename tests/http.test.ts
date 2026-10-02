@@ -8,6 +8,8 @@ import { readHttp } from "../examples/http-client.js";
 import { readMcp } from "../examples/mcp-client.js";
 import { Store } from "../packages/service/src/store.js";
 import { createApp } from "../packages/service/src/http.js";
+import { DeliveryQueue } from "../packages/sources/src/queue.js";
+import { MAX_INGEST_BYTES } from "../packages/domain/src/index.js";
 import {
   config,
   event,
@@ -113,6 +115,70 @@ test("real HTTP and SDK Streamable HTTP read identical scoped content and reject
     );
   } finally {
     await client.close();
+    await run.close();
+  }
+});
+test("large Unicode and JSON-escaped observations drain in byte-bounded batches through HTTP", async () => {
+  const run = await start();
+  let accepted = 0;
+  try {
+    for (const [kind, text] of [
+      "界".repeat(8000),
+      "\u0000".repeat(8000),
+    ].entries()) {
+      const queue = new DeliveryQueue(source, 100, 3600000, () => now);
+      queue.pause(false);
+      for (let i = 0; i < 60; i++)
+        assert(
+          queue.capture(
+            event({
+              eventId: `encoded-${kind}-${i}`,
+              messageId: `encoded-${kind}-${i}`,
+              text,
+            }),
+          ),
+        );
+      for (let batch = 0; batch < 8 && queue.status().queueDepth; batch++)
+        await queue.flush(async (events, health) => {
+          const body = { events, health };
+          assert(
+            new TextEncoder().encode(JSON.stringify(body)).byteLength <=
+              MAX_INGEST_BYTES,
+          );
+          assert(events.length > 0 && events.length <= 100);
+          const response = await request(
+            run.url,
+            "/v1/ingest",
+            producerToken,
+            body,
+          );
+          assert.equal(response.status, 200);
+          accepted += (await response.json()).accepted;
+        });
+      assert.equal(queue.status().queueDepth, 0);
+      assert.equal(queue.status().overflow, 0);
+    }
+    assert.equal(accepted, 120);
+    let cursor: string | undefined;
+    let read = 0;
+    for (let page = 0; page < 3; page++) {
+      const response = await request(
+        run.url,
+        "/v1/read_messages",
+        readerToken,
+        {
+          limit: 100,
+          ...(cursor ? { cursor } : {}),
+        },
+      );
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      read += body.items.length;
+      if (!body.hasMore) break;
+      cursor = body.cursor;
+    }
+    assert.equal(read, 120);
+  } finally {
     await run.close();
   }
 });

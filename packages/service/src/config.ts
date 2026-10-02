@@ -127,6 +127,12 @@ export const configSchema = z
       ctx.addIssue({ code: "custom", message: "duplicate_grant" });
   });
 export type Config = z.infer<typeof configSchema>;
+/** Remote TLS proxy stays on IPv4; an explicit local IPv6 origin binds IPv6 loopback. */
+export function loopbackHost(config: Config): "127.0.0.1" | "::1" {
+  return !config.remote && new URL(config.publicUrl).hostname === "[::1]"
+    ? "::1"
+    : "127.0.0.1";
+}
 export function loadConfig() {
   try {
     return configSchema.parse(

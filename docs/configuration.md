@@ -74,6 +74,8 @@ The bot uses `BRIDGE_URL` (default loopback port 8787), `BRIDGE_SOURCE_ID`, `BOT
 
 The plugin settings select endpoint, personal source ID, account ID, conversation IDs, current generation, queue limit (1–1000, default 500), expiry (1–60 minutes, default 60) and observation consent (false initially). Start/setting changes pause export; Resume requires a session-only producer credential entered into a password field. Never supply a Discord login token.
 
+Local `http://[::1]:<port>` binds IPv6 loopback; local IPv4/localhost origins use IPv4 loopback. Prefer an explicit IP address when a client resolves localhost differently. Remote operation always binds IPv4 loopback behind the documented TLS proxy.
+
 ## Rotation and revocation
 
 Use local control to revoke the affected source/conversation before replacing its producer credentials. For local auth, remove the old hash from private configuration and restart the connector; provision a new private credential/hash pair without printing it. For JWT auth, revoke the issuer grant/credential and remove or narrow the configured bridge grant, then restart. Short token lifetime limits exposure but is not instant issuer revocation checking.

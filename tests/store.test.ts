@@ -275,6 +275,90 @@ test("conflicting event id is rejected atomically and search is literal scoped t
     s.close();
   }
 });
+test("Unicode lowercase search matches normalized current bodies with stable scoped pagination", () => {
+  const s = new Store(config(), () => now);
+  const query = "ä";
+  try {
+    s.ingest(producer, [
+      event({
+        eventId: "unicode-1",
+        messageId: "unicode-1",
+        text: "Ä Synthetic",
+      }),
+      event({
+        eventId: "unicode-2",
+        messageId: "unicode-2",
+        text: "A\u0308 Synthetic",
+      }),
+      event({
+        eventId: "unicode-other",
+        messageId: "unicode-other",
+        conversationId: "selected-b",
+        text: "Ä excluded from narrow grant",
+      }),
+      event({
+        eventId: "unicode-cyrillic",
+        messageId: "unicode-cyrillic",
+        text: "ПРИВЕТ",
+      }),
+    ]);
+    const principal = { ...reader, conversationIds: ["selected-a"] };
+    const first = s.execute(principal, "search", {
+      query,
+      limit: 1,
+    }) as ReturnType<typeof page>;
+    assert.equal(first.items.length, 1);
+    assert.equal(first.items[0].text, "Ä Synthetic");
+    assert.equal(first.hasMore, true);
+    s.ingest(producer, [
+      event({
+        eventId: "unicode-new",
+        messageId: "unicode-new",
+        text: "Ä new insertion",
+      }),
+    ]);
+    const second = s.execute(principal, "search", {
+      query,
+      limit: 1,
+      cursor: first.cursor!,
+    }) as ReturnType<typeof page>;
+    assert.equal(second.items.length, 1);
+    assert.equal(second.items[0].text, "A\u0308 Synthetic");
+    assert.equal(second.hasMore, false);
+    assert.equal(page(s, "search", { query: "привет" }).items.length, 1);
+    assert.equal(page(s, "search", { query: "a synthetic" }).items.length, 0); // accents stay meaningful
+    s.ingest(producer, [
+      event({
+        eventId: "unicode-edit",
+        messageId: "unicode-1",
+        text: "Edited body",
+        revision: now,
+      }),
+    ]);
+    s.ingest(producer, [
+      {
+        op: "delete",
+        eventId: "unicode-delete",
+        sourceId: source.id,
+        accountId: source.accountId,
+        conversationId: "selected-a",
+        generation: 1,
+        messageId: "unicode-2",
+        observedAt: now,
+        revision: now,
+      },
+    ]);
+    const current = s.execute(principal, "search", { query }) as ReturnType<
+      typeof page
+    >;
+    assert.deepEqual(
+      current.items.map((v) => v.text),
+      ["Ä new insertion"],
+    );
+  } finally {
+    s.close();
+  }
+});
 test("producer restricted to one conversation cannot revoke whole source", () => {
   const s = new Store(config(), () => now);
   try {

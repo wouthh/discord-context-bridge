@@ -6,13 +6,13 @@ The lockfile records exact dependencies and integrity hashes. Tests create only
 synthetic content in memory or securely created temporary directories.
 
 `npm run check` runs TypeScript, ESLint, formatting, synthetic tests, production
-builds and publication pattern checks. The initial suite passed 67 tests covering
+builds and publication pattern checks. The initial suite passed 70 tests covering
 compatibility-helper and private-state symlink isolation, canonical browser origins, approved-origin CORS preflights,
 capture/ingest/read scopes, owner/account isolation, role and JWT audience/expiry,
 edits, duplicate/out-of-order delivery, deletions, recoverable unavailable edits,
 retention, revocation persistence, concurrent SQLite control, stable insertion
 sequences, cursor expiry/retention resync, queue pressure/backoff, synthetic secret
-file permissions, setup alias-retarget protection, lost-revocation-response reconciliation, grant-filtered revocation barriers, validated plugin control retries, unconfirmed control recovery across restart and unrelated generation changes, native UTF-8 limits, Unicode/escaped-text ingestion batches, persistent restart/checkpoint recovery and actual loopback HTTP/MCP SDK readers sharing one data layer. A simulated loopback TLS-proxy request exercises signed synthetic JWT ingestion and MCP reads; it is not an HTTPS deployment test.
+file permissions, setup alias-retarget protection, lost-revocation-response reconciliation, grant-filtered revocation barriers, validated plugin control retries, unconfirmed control recovery across restart and unrelated generation changes, native UTF-8 limits, Unicode/escaped-text ingestion batches, Unicode lowercase search with pagination/edit/deletion scope, stalled bot export deadline and pause recovery, persistent restart/checkpoint recovery and actual loopback HTTP/MCP SDK readers sharing one data layer. A simulated loopback TLS-proxy request exercises signed synthetic JWT ingestion and MCP reads; it is not an HTTPS deployment test.
 `npm audit` reported zero advisories in the resolved dependencies.
 
 Generated plugin source passed upstream Vencord TypeScript and native/renderer

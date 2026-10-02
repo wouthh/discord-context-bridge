@@ -143,6 +143,100 @@ test("error bodies and discovery never reveal rejected content, bearer, validati
     await run.close();
   }
 });
+test("approved browser origins get bounded preflights while HTTP and MCP still require authentication", async () => {
+  const run = await start();
+  const origin = "https://consumer.example.invalid";
+  run.s.config.origins = [origin];
+  const preflight = (route: string, overrides: Record<string, string> = {}) =>
+    fetch(new URL(route, run.url), {
+      method: "OPTIONS",
+      headers: {
+        Origin: origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers":
+          "Authorization, Content-Type, MCP-Protocol-Version",
+        ...overrides,
+      },
+    });
+  try {
+    for (const route of ["/mcp", "/v1/read_messages", "/v1/ingest"]) {
+      const response = await preflight(route);
+      assert.equal(response.status, 204);
+      assert.equal(response.headers.get("Access-Control-Allow-Origin"), origin);
+      assert.equal(
+        response.headers.get("Access-Control-Allow-Methods"),
+        "POST",
+      );
+      assert.equal(
+        response.headers.get("Access-Control-Allow-Credentials"),
+        null,
+      );
+      const unauthenticated = await fetch(new URL(route, run.url), {
+        method: "POST",
+        headers: { Origin: origin, "Content-Type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(unauthenticated.status, 401);
+      assert.equal(
+        unauthenticated.headers.get("Access-Control-Allow-Origin"),
+        origin,
+      );
+    }
+    const excluded = await preflight("/mcp", {
+      Origin: "https://excluded.example.invalid",
+    });
+    assert.equal(excluded.status, 403);
+    assert.equal(excluded.headers.get("Access-Control-Allow-Origin"), null);
+    assert.equal(
+      (await preflight("/mcp", { "Access-Control-Request-Method": "DELETE" }))
+        .status,
+      403,
+    );
+    assert.equal(
+      (
+        await preflight("/mcp", {
+          "Access-Control-Request-Headers": "X-Unsafe",
+        })
+      ).status,
+      403,
+    );
+    assert.equal((await preflight("/unknown")).status, 403);
+    assert.equal(
+      (
+        await preflight("/v1/producer-scope", {
+          "Access-Control-Request-Method": "GET",
+        })
+      ).status,
+      204,
+    );
+    const read = await fetch(new URL("/v1/read_messages", run.url), {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        Authorization: `Bearer ${readerToken}`,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+    assert.equal(read.status, 200);
+    assert.equal(read.headers.get("Access-Control-Allow-Origin"), origin);
+    const client = new Client({ name: "synthetic-browser", version: "1" });
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("/mcp", run.url), {
+          requestInit: {
+            headers: { Origin: origin, Authorization: `Bearer ${readerToken}` },
+          },
+        }),
+      );
+      assert.equal((await client.listTools()).tools.length, 5);
+    } finally {
+      await client.close();
+    }
+  } finally {
+    await run.close();
+  }
+});
 test("remote-shaped loopback proxy requests validate actual JWTs and TLS/host policy for HTTP and MCP", async () => {
   const { generateKeyPair, exportJWK, createLocalJWKSet, SignJWT } =
     await import("jose");

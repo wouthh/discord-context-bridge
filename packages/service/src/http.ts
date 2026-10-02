@@ -53,6 +53,49 @@ export function createApp(store: Store, verify = authenticator(store.config)) {
       res.status(403).json({ error: "origin_denied" });
       return;
     }
+    if (req.headers.origin) {
+      res.set("Access-Control-Allow-Origin", req.headers.origin);
+      res.vary("Origin");
+      res.set("Access-Control-Expose-Headers", "WWW-Authenticate");
+      if (req.method === "OPTIONS") {
+        const method =
+          req.path === "/mcp" ||
+          req.path === "/v1/ingest" ||
+          req.path === "/v1/source-control" ||
+          operations.some((op) => req.path === `/v1/${op}`)
+            ? "POST"
+            : req.path === "/v1/producer-scope" ||
+                (store.config.auth.mode === "jwt" &&
+                  req.path === "/.well-known/oauth-protected-resource/mcp")
+              ? "GET"
+              : undefined;
+        const headers = [
+          "authorization",
+          "content-type",
+          "mcp-protocol-version",
+        ];
+        const requested = String(
+          req.headers["access-control-request-headers"] ?? "",
+        )
+          .split(",")
+          .map((header) => header.trim().toLowerCase())
+          .filter(Boolean);
+        if (
+          !method ||
+          req.headers["access-control-request-method"] !== method ||
+          requested.some((header) => !headers.includes(header))
+        ) {
+          res.status(403).json({ error: "preflight_denied" });
+          return;
+        }
+        res.set("Access-Control-Allow-Methods", method);
+        res.set("Access-Control-Allow-Headers", headers.join(", "));
+        res.vary("Access-Control-Request-Method");
+        res.vary("Access-Control-Request-Headers");
+        res.status(204).end();
+        return;
+      }
+    }
     next();
   });
   app.use(express.json({ limit: "1mb" }));

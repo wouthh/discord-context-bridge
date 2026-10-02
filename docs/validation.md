@@ -6,11 +6,11 @@ The lockfile records exact dependencies and integrity hashes. Tests create only
 synthetic content in memory or securely created temporary directories.
 
 `npm run check` runs TypeScript, ESLint, formatting, synthetic tests, production
-builds and publication pattern checks. The initial suite passed 82 tests covering
+builds and publication pattern checks. The initial suite passed 87 tests covering
 compatibility-helper and private-state symlink isolation, local advertised/listening port consistency, canonical browser origins, approved-origin CORS preflights,
 capture/ingest/read scopes, owner/account isolation, role and JWT audience/expiry,
 edits, duplicate/out-of-order delivery, deletions, recoverable unavailable edits,
-retention, revocation persistence, concurrent SQLite control, stable insertion
+retention, revocation persistence, idempotent startup reconciliation and its SQLite write lock, concurrent SQLite control, stable insertion
 sequences, cursor expiry/retention resync, queue pressure/backoff, synthetic secret
 file permissions, setup/rotation alias-retarget protection and unsafe runtime/rotation configuration and database override rejection, actual service/control CLI fixed-error checks and hard-linked credential protection, lost-revocation-response reconciliation, grant-filtered revocation barriers, validated plugin control retries, unconfirmed control recovery across restart and unrelated generation changes, native UTF-8 limits, Unicode/escaped-text ingestion batches, Unicode lowercase search with pagination/edit/deletion scope, stalled bot export deadline and pause recovery, stale permission/history results and guild-wide revocation, authenticated IPv6 loopback HTTP/MCP, persistent restart/checkpoint recovery and actual loopback HTTP/MCP SDK readers sharing one data layer. A simulated loopback TLS-proxy request exercises signed synthetic JWT ingestion and MCP reads; it is not an HTTPS deployment test.
 `npm audit` reported zero advisories in the resolved dependencies.

@@ -78,29 +78,33 @@ export class Store {
  CREATE TABLE IF NOT EXISTS watermark(floor INTEGER NOT NULL);INSERT INTO watermark SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM watermark);
  CREATE TABLE IF NOT EXISTS health(source TEXT PRIMARY KEY,json TEXT,received INTEGER);
  CREATE TABLE IF NOT EXISTS cursors(id TEXT PRIMARY KEY,subject TEXT,kind TEXT,filter TEXT,epoch INTEGER,expires INTEGER,snapshot INTEGER,position INTEGER);`);
-    // Existing persisted revocations win over startup configuration. Widening needs the local apply-scopes command.
-    for (const source of config.sources) {
-      this.db
-        .prepare("INSERT OR IGNORE INTO sources VALUES (?,?)")
-        .run(source.id, JSON.stringify(source));
-    }
-    for (const source of this.sources()) {
-      const cfg = config.sources.find((s) => s.id === source.id);
-      if (
-        !cfg ||
-        (!cfg.enabled && source.enabled) ||
-        cfg.type !== source.type ||
-        cfg.accountId !== source.accountId ||
-        source.conversations.some(
-          (v) =>
-            !cfg.conversations.some(
-              (c) => c.id === v.id && c.guildId === v.guildId,
-            ),
-        )
-      ) {
-        this.controlInternal(source.id, "revoke");
-      }
-    }
+    // Seed and reconcile under one write lock; persisted revocations never widen.
+    this.db
+      .transaction(() => {
+        for (const source of config.sources) {
+          this.db
+            .prepare("INSERT OR IGNORE INTO sources VALUES (?,?)")
+            .run(source.id, JSON.stringify(source));
+        }
+        for (const source of this.sources()) {
+          const cfg = config.sources.find((s) => s.id === source.id);
+          if (
+            source.enabled &&
+            (!cfg ||
+              !cfg.enabled ||
+              cfg.type !== source.type ||
+              cfg.accountId !== source.accountId ||
+              source.conversations.some(
+                (v) =>
+                  !cfg.conversations.some(
+                    (c) => c.id === v.id && c.guildId === v.guildId,
+                  ),
+              ))
+          )
+            this.controlInternal(source.id, "revoke");
+        }
+      })
+      .immediate();
     this.sweep();
   }
   close() {

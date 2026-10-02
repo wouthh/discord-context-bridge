@@ -539,3 +539,178 @@ test("persistent messages and incremental checkpoint survive service restart wit
     rmSync(dir, { recursive: true, force: true });
   }
 });
+for (const mismatch of ["removed", "narrowed", "account-changed"] as const) {
+  test(`startup ${mismatch} scope revocation is durable and repeated restarts preserve unrelated cursors`, () => {
+    const dir = mkdtempSync(join(tmpdir(), "bridge-reconcile-"));
+    const file = join(dir, "store.sqlite");
+    const stable = {
+      ...source,
+      id: "stable-source",
+      accountId: "stable-account",
+      conversations: [{ id: "stable-conversation" }],
+    };
+    const initial = config(file);
+    initial.sources = [source, stable];
+    const fullProducer = { ...producer, sourceIds: [source.id, stable.id] };
+    const stableReader = { ...reader, sourceIds: [stable.id] };
+    let s = new Store(initial, () => now);
+    try {
+      s.ingest(fullProducer, [
+        event(),
+        event({
+          eventId: "affected-b",
+          conversationId: "selected-b",
+          messageId: "affected-b",
+        }),
+        event({
+          eventId: "stable-initial",
+          sourceId: stable.id,
+          accountId: stable.accountId,
+          conversationId: "stable-conversation",
+          messageId: "stable-message",
+        }),
+      ]);
+      s.close();
+      const changed = config(file);
+      const conflicting =
+        mismatch === "narrowed"
+          ? { ...source, conversations: [{ id: "selected-a" }] }
+          : { ...source, accountId: "different-account" };
+      changed.sources =
+        mismatch === "removed" ? [stable] : [conflicting, stable];
+      s = new Store(changed, () => now);
+      const revoked = s.sources().find((value) => value.id === source.id)!;
+      assert.equal(revoked.enabled, false);
+      assert.equal(revoked.generation, 2);
+      const deletedCount = () =>
+        (
+          s.db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM changes WHERE source=? AND op='delete'",
+            )
+            .get(source.id) as { n: number }
+        ).n;
+      assert.equal(deletedCount(), 2);
+      const bodyCount = () =>
+        (
+          s.db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM messages WHERE source=? AND text IS NOT NULL",
+            )
+            .get(source.id) as { n: number }
+        ).n;
+      assert.equal(bodyCount(), 0);
+      const cursor = (
+        s.execute(stableReader, "read_changes", {}) as { cursor: string }
+      ).cursor;
+      assert.ok(cursor);
+      for (let restart = 0; restart < 2; restart++) {
+        s.close();
+        s = new Store(changed, () => now);
+        assert.equal(
+          s.sources().find((value) => value.id === source.id)!.generation,
+          2,
+        );
+        assert.equal(
+          s.sources().find((value) => value.id === source.id)!.enabled,
+          false,
+        );
+        assert.equal(deletedCount(), 2);
+        assert.equal(bodyCount(), 0);
+        assert.doesNotThrow(() =>
+          s.execute(stableReader, "read_changes", { cursor }),
+        );
+        assert.throws(
+          () =>
+            s.ingest(fullProducer, [event({ eventId: `stale-${restart}` })]),
+          /scope_denied/,
+        );
+      }
+      s.ingest(fullProducer, [
+        event({
+          eventId: "stable-next",
+          sourceId: stable.id,
+          accountId: stable.accountId,
+          conversationId: "stable-conversation",
+          messageId: "stable-next",
+        }),
+      ]);
+      const changes = s.execute(stableReader, "read_changes", { cursor }) as {
+        items: { sourceId: string; messageId: string }[];
+      };
+      assert.deepEqual(
+        changes.items.map((value) => value.messageId),
+        ["stable-next"],
+      );
+      assert.equal(changes.items[0].sourceId, stable.id);
+    } finally {
+      s.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+test("initial disabled sources stay disabled without startup generation or change churn", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bridge-disabled-restart-"));
+  const file = join(dir, "store.sqlite");
+  const initial = config(file);
+  initial.sources = [{ ...source, enabled: false }];
+  let s = new Store(initial, () => now);
+  try {
+    assert.equal(s.sources()[0].enabled, false);
+    assert.equal(s.sources()[0].generation, 1);
+    s.close();
+    const removed = config(file);
+    removed.sources = [];
+    s = new Store(removed, () => now);
+    assert.equal(s.sources()[0].enabled, false);
+    assert.equal(s.sources()[0].generation, 1);
+    assert.equal(
+      (s.db.prepare("SELECT COUNT(*) AS n FROM changes").get() as { n: number })
+        .n,
+      0,
+    );
+    assert.throws(() => s.ingest(producer, [event()]), /scope_denied/);
+  } finally {
+    s.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("startup seed and mismatch reconciliation hold one immediate lock across independent SQLite connections", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bridge-startup-lock-"));
+  const file = join(dir, "store.sqlite");
+  const other = new Store(config(file), () => now);
+  let started: Store | undefined;
+  try {
+    other.db.pragma("busy_timeout = 0");
+    const narrowed = config(file);
+    const sources = [{ ...source, conversations: [{ id: "selected-a" }] }];
+    let attempted = false;
+    Object.defineProperty(narrowed, "sources", {
+      get() {
+        if (!attempted) {
+          attempted = true;
+          assert.throws(
+            () =>
+              other.control(producer, {
+                sourceId: source.id,
+                accountId: source.accountId,
+                generation: 1,
+                action: "purge",
+              }),
+            { code: "SQLITE_BUSY" },
+          );
+        }
+        return sources;
+      },
+    });
+    started = new Store(narrowed, () => now);
+    assert.equal(attempted, true);
+    assert.equal(started.sources()[0].enabled, false);
+    assert.equal(started.sources()[0].generation, 2);
+    assert.equal(other.sources()[0].generation, 2);
+  } finally {
+    started?.close();
+    other.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -1,7 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID, createHash } from "node:crypto";
-import { mkdirSync, chmodSync } from "node:fs";
-import { dirname } from "node:path";
+import { privateDatabasePath } from "./database-path.js";
 import {
   BridgeError,
   allowed,
@@ -57,10 +56,9 @@ export class Store {
     private now = Date.now,
   ) {
     if (config.database !== ":memory:") {
-      mkdirSync(dirname(config.database), { recursive: true, mode: 0o700 });
+      config.database = privateDatabasePath(config.database);
     }
     this.db = new Database(config.database);
-    if (config.database !== ":memory:") chmodSync(config.database, 0o600);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("secure_delete = ON");
     this.db.function(

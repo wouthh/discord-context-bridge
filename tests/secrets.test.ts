@@ -266,3 +266,65 @@ test("rotation pins the canonical private config inode when a safe parent alias 
     await rm(dir, { recursive: true, force: true });
   }
 });
+test("fallback credential handles reject hardlinks and symlinks before reads or replacement writes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bridge-secret-links-"));
+  const previous = process.env.BRIDGE_STATE_DIR;
+  process.env.BRIDGE_STATE_DIR = dir;
+  const noKeyring = async () => {
+    throw new Error("synthetic-keyring-unavailable");
+  };
+  try {
+    const path = join(dir, "DISCORD_BOT_TOKEN.secret");
+    const alias = join(dir, "same-inode");
+    const original = "synthetic-original-long-credential";
+    await saveSecret("DISCORD_BOT_TOKEN", original, false, noKeyring);
+    await link(path, alias);
+    await assert.rejects(
+      readSecret("DISCORD_BOT_TOKEN", noKeyring),
+      /credential_unavailable/,
+    );
+    await assert.rejects(
+      saveSecret("DISCORD_BOT_TOKEN", "synthetic-next", true, noKeyring),
+      /credential_permissions_invalid/,
+    );
+    assert.equal(await readFile(path, "utf8"), original);
+    assert.equal(await readFile(alias, "utf8"), original);
+    await rm(alias);
+    // Ordinary replacement, including shorter content, preserves private mode.
+    await saveSecret("DISCORD_BOT_TOKEN", "synthetic-next", true, noKeyring);
+    assert.equal(
+      await readSecret("DISCORD_BOT_TOKEN", noKeyring),
+      "synthetic-next",
+    );
+    assert.equal(await readFile(path, "utf8"), "synthetic-next");
+    assert.equal((await stat(path)).mode & 0o077, 0);
+    await symlink(path, join(dir, "BRIDGE_READER_TOKEN.secret"));
+    await assert.rejects(
+      readSecret("BRIDGE_READER_TOKEN", noKeyring),
+      /credential_unavailable/,
+    );
+    await assert.rejects(
+      saveSecret(
+        "BRIDGE_READER_TOKEN",
+        "synthetic-replacement",
+        true,
+        noKeyring,
+      ),
+    );
+    assert.equal(await readFile(path, "utf8"), "synthetic-next");
+    // Rotation can create a missing fallback with exclusive owner-only creation.
+    await saveSecret("BRIDGE_PRODUCER_TOKEN", "synthetic-new", true, noKeyring);
+    assert.equal(
+      await readSecret("BRIDGE_PRODUCER_TOKEN", noKeyring),
+      "synthetic-new",
+    );
+    assert.equal(
+      (await stat(join(dir, "BRIDGE_PRODUCER_TOKEN.secret"))).mode & 0o077,
+      0,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.BRIDGE_STATE_DIR;
+    else process.env.BRIDGE_STATE_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});

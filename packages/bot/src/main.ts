@@ -9,6 +9,7 @@ import {
 } from "discord.js";
 import { sourceSchema, type Source } from "../../domain/src/index.js";
 import { DeliveryQueue } from "../../sources/src/queue.js";
+import { processPendingRevocations } from "./revocation.js";
 import { readSecret } from "../../service/src/secrets.js";
 import {
   boundedSetting,
@@ -234,16 +235,15 @@ async function main() {
       queue.connected(client.isReady());
       if (changed) await history();
       await checkPermissions(true);
-      for (const [conversationId, old] of pending) {
-        await request("/v1/source-control", {
-          sourceId: old.id,
-          accountId: old.accountId,
-          generation: next.generation,
-          action: "revoke",
-          conversationId,
-        });
-        pending.delete(conversationId);
-        // Revocation increments server generation. Obtain a fresh scope before exporting.
+      const mutated = await processPendingRevocations(
+        pending,
+        next,
+        async (control) => {
+          await request("/v1/source-control", control);
+        },
+      );
+      if (mutated) {
+        // A newly accepted control advances generation. Refresh before export.
         metadata.clear();
         queue.purge();
         signature = "";

@@ -160,3 +160,125 @@ test("metadata expiry, eviction, clearing, and different generations conservativ
     null,
   );
 });
+
+test("lost revocation response reconciles authenticated scope and exports the remaining conversation", async () => {
+  const { processPendingRevocations } =
+    await import("../packages/bot/src/revocation.js");
+  const { Store } = await import("../packages/service/src/store.js");
+  const { DeliveryQueue } = await import("../packages/sources/src/queue.js");
+  const fixtures = await import("./fixtures.js");
+  const selected: Source = {
+    ...source,
+    conversations: [
+      ...source.conversations,
+      { id: "remaining", guildId: "guild" },
+    ],
+  };
+  const configuration = fixtures.config();
+  configuration.sources = [selected];
+  const producer = { ...fixtures.producer, sourceIds: [selected.id] };
+  const reader = { ...fixtures.reader, sourceIds: [selected.id] };
+  const store = new Store(configuration, () => fixtures.now);
+  const pending = new Map([["selected", selected]]);
+  let controls = 0;
+  try {
+    // The server commits, but the simulated network loses the acknowledgement.
+    await assert.rejects(
+      processPendingRevocations(pending, selected, async (request) => {
+        controls++;
+        store.control(producer, request);
+        throw new Error("synthetic-response-lost");
+      }),
+      /synthetic-response-lost/,
+    );
+    assert.equal(pending.size, 1);
+    const refreshed = store.producerScope(producer).sources[0];
+    assert.equal(refreshed.generation, 2);
+    assert.equal(
+      refreshed.conversations.some((c) => c.id === "selected"),
+      false,
+    );
+    const queue = new DeliveryQueue(
+      refreshed,
+      500,
+      3600000,
+      () => fixtures.now,
+    );
+    queue.pause(false);
+    queue.connected(true);
+    const remaining = mapMessage(
+      refreshed,
+      {
+        ...message,
+        channelId: "remaining",
+        createdTimestamp: fixtures.now - 1000,
+      },
+      "upsert",
+      fixtures.now,
+    )!;
+    assert.equal(queue.capture(remaining), true);
+    assert.equal(
+      await processPendingRevocations(pending, refreshed, async () => {
+        controls++;
+        throw new Error("unexpected-second-control");
+      }),
+      false,
+    );
+    assert.equal(pending.size, 0);
+    assert.equal(controls, 1);
+    await queue.flush(async (events, health) => {
+      assert.equal(store.ingest(producer, events, health).accepted, 1);
+    });
+    assert.equal(queue.status().queueDepth, 0);
+    const result = store.execute(reader, "read_messages", {}) as {
+      items: { conversationId: string }[];
+    };
+    assert.deepEqual(
+      result.items.map((item) => item.conversationId),
+      ["remaining"],
+    );
+    assert.equal(
+      queue.capture({
+        ...remaining,
+        eventId: "excluded-retry",
+        conversationId: "selected",
+      }),
+      false,
+    );
+  } finally {
+    store.close();
+  }
+});
+test("revocation acknowledgement requires matching identity, newer generation and absent conversation", async () => {
+  const { processPendingRevocations } =
+    await import("../packages/bot/src/revocation.js");
+  for (const refreshed of [
+    { ...source, generation: 2, accountId: "other" },
+    { ...source, generation: 2, id: "other" },
+  ]) {
+    const pending = new Map([["selected", source]]);
+    await assert.rejects(
+      processPendingRevocations(pending, refreshed, async () => {
+        throw new Error("unexpected-control");
+      }),
+      /IDENTITY_MISMATCH/,
+    );
+    assert.equal(pending.size, 1);
+  }
+  for (const refreshed of [
+    { ...source, conversations: [] },
+    { ...source, generation: 2 },
+  ]) {
+    const pending = new Map([["selected", source]]);
+    let attempted = false;
+    await assert.rejects(
+      processPendingRevocations(pending, refreshed, async () => {
+        attempted = true;
+        throw new Error("synthetic-control-failed");
+      }),
+      /synthetic-control-failed/,
+    );
+    assert.equal(attempted, true);
+    assert.equal(pending.size, 1);
+  }
+});

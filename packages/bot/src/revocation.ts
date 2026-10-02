@@ -43,3 +43,43 @@ export async function processPendingRevocations(
   }
   return false;
 }
+
+/** Ignore stale async results and channels absent from the current selection. */
+export function beginRevocation(
+  current: Source | undefined,
+  conversationId: string,
+  revoked: Set<string>,
+  pending: Map<string, Source>,
+  expected: Source | undefined = current,
+): Source | null {
+  if (
+    !current ||
+    current !== expected ||
+    revoked.has(conversationId) ||
+    !current.conversations.some((c) => c.id === conversationId)
+  )
+    return null;
+  revoked.add(conversationId);
+  pending.set(conversationId, current);
+  return {
+    ...current,
+    conversations: current.conversations.filter((c) => c.id !== conversationId),
+  };
+}
+
+/** Validate a captured guild result once, then remove its current channels synchronously. */
+export function beginGuildRevocation(
+  current: Source | undefined,
+  guildId: string,
+  revoked: Set<string>,
+  pending: Map<string, Source>,
+  expected: Source | undefined = current,
+): Source | null {
+  if (!current || current !== expected) return null;
+  let next = current;
+  for (const conversation of current.conversations) {
+    if (conversation.guildId !== guildId) continue;
+    next = beginRevocation(next, conversation.id, revoked, pending) ?? next;
+  }
+  return next === current ? null : next;
+}

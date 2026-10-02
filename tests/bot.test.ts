@@ -362,3 +362,123 @@ test("a filtered producer view cannot acknowledge revocation after unrelated gen
     store.close();
   }
 });
+test("stale async permission/history failures cannot revoke removed or refreshed scope or block remaining export", async () => {
+  const { beginRevocation, processPendingRevocations } =
+    await import("../packages/bot/src/revocation.js");
+  const { DeliveryQueue } = await import("../packages/sources/src/queue.js");
+  const fixtures = await import("./fixtures.js");
+  const old: Source = {
+    ...source,
+    conversations: [
+      ...source.conversations,
+      { id: "remaining", guildId: "guild" },
+    ],
+  };
+  let current: Source = old;
+  const pending = new Map<string, Source>();
+  const revoked = new Set<string>();
+  let release!: () => void;
+  const lateFailure = new Promise<void>((resolve) => {
+    release = resolve;
+  }).then(() => {
+    // A delayed permission or history rejection belongs to the captured scope.
+    const next = beginRevocation(current, "selected", revoked, pending, old);
+    if (next) {
+      current = next;
+      queue.configure(next);
+    }
+  });
+  current = {
+    ...old,
+    generation: 2,
+    conversations: [{ id: "remaining", guildId: "guild" }],
+  };
+  const queue = new DeliveryQueue(current, 500, 3600000, () => fixtures.now);
+  queue.pause(false);
+  queue.connected(true);
+  const retained = mapMessage(
+    current,
+    {
+      ...message,
+      channelId: "remaining",
+      createdTimestamp: fixtures.now - 1000,
+    },
+    "upsert",
+    fixtures.now,
+  )!;
+  queue.capture(retained);
+  release();
+  await lateFailure;
+  assert.equal(pending.size, 0);
+  assert.equal(revoked.size, 0);
+  assert.equal(queue.status().queueDepth, 1);
+  assert.equal(beginRevocation(current, "selected", revoked, pending), null);
+  assert.equal(
+    await processPendingRevocations(
+      pending,
+      current,
+      async () => {
+        throw new Error("unexpected-control");
+      },
+      true,
+    ),
+    false,
+  );
+  let exported = 0;
+  await queue.flush(async (events) => {
+    exported = events.length;
+  });
+  assert.equal(exported, 1);
+  assert.equal(queue.status().queueDepth, 0);
+  // A changed generation can retain the same channel; stale results still do not apply.
+  current = { ...old, generation: 3 };
+  assert.equal(
+    beginRevocation(current, "selected", revoked, pending, old),
+    null,
+  );
+  assert.equal(pending.size, 0);
+  const valid = beginRevocation(current, "selected", revoked, pending, current);
+  assert.ok(valid);
+  assert.equal(
+    valid.conversations.some((c) => c.id === "selected"),
+    false,
+  );
+  assert.equal(pending.size, 1);
+});
+test("current guild access loss revokes all selected guild channels; stale batch revokes none", async () => {
+  const { beginGuildRevocation } =
+    await import("../packages/bot/src/revocation.js");
+  const captured: Source = {
+    ...source,
+    conversations: [
+      { id: "selected", guildId: "guild" },
+      { id: "second-selected", guildId: "guild" },
+      { id: "other-guild-selected", guildId: "other-guild" },
+    ],
+  };
+  const pending = new Map<string, Source>();
+  const revoked = new Set<string>();
+  const changed = { ...captured, generation: 2 };
+  assert.equal(
+    beginGuildRevocation(changed, "guild", revoked, pending, captured),
+    null,
+  );
+  assert.equal(pending.size, 0);
+  assert.equal(revoked.size, 0);
+  const next = beginGuildRevocation(
+    captured,
+    "guild",
+    revoked,
+    pending,
+    captured,
+  );
+  assert.ok(next);
+  assert.deepEqual(
+    next.conversations.map((c) => c.id),
+    ["other-guild-selected"],
+  );
+  assert.deepEqual([...pending.keys()], ["selected", "second-selected"]);
+  assert.deepEqual([...revoked], ["selected", "second-selected"]);
+  assert.equal(pending.get("selected")?.generation, captured.generation);
+  assert.equal(pending.get("second-selected")?.generation, captured.generation);
+});
